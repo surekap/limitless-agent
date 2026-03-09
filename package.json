@@ -1,0 +1,32 @@
+{
+    "name": "limitless",
+    "version": "2.0.0",
+    "main": "agent.js",
+    "license": "MIT",
+    "description": "Agent-based lifelog processor with MCP tools (98% code reduction from v1.0)",
+    "scripts": {
+        "start": "node start-production.js",
+        "dev": "node agent.js",
+        "agent": "node agent.js",
+        "fetch": "node cron/fetchLifelogs.js",
+        "init-db": "mysql -u root -p < sql/schema.sql",
+        "test:agent": "node tests/test-agent.js",
+        "test:real": "node tests/test-real-lifelogs.js",
+        "test:stock": "node tests/test-stock-saving.js",
+        "test:improved": "node tests/test-improved-agent.js",
+        "test:comprehensive": "node tests/comprehensive-test.js",
+        "test:debug": "node tests/debug-wine-test.js",
+        "test:final": "node tests/final-test.js",
+        "test:check": "node tests/check-created-data.js",
+        "old-system": "node old-system-backup/server.js"
+    },
+    "dependencies": {
+        "@anthropic-ai/sdk": "^0.32.1",
+        "@notionhq/client": "^4.0.2",
+        "axios": "^1.9.0",
+        "dotenv": "^16.5.0",
+        "moment-timezone": "^0.6.0",
+        "mysql2": "^3.14.1",
+        "node-cron": "^4.1.0"
+    }
+}
