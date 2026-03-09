@@ -1,5 +1,9 @@
 const axios = require("axios");
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Fetch lifelogs from Limitless API with cursor pagination.
  * Docs: GET /v1/lifelogs, max 10 items per request.
@@ -19,6 +23,8 @@ async function getLifelogs({
   end,
   timeoutMs = 30000,
   maxPages = 2000,
+  requestRetries = 4,
+  retryDelayMs = 1000,
 }) {
   if (!apiKey) {
     throw new Error("Missing LIMITLESS_API_KEY");
@@ -52,29 +58,51 @@ async function getLifelogs({
     if (cursor) params.cursor = cursor;
 
     let response;
-    try {
-      response = await axios.get(`${apiUrl}/${endpoint}`, {
-        headers: {
-          "X-API-Key": apiKey,
-          "Content-Type": "application/json",
-        },
-        params,
-        timeout: timeoutMs,
-      });
-    } catch (error) {
-      if (axios.isAxiosError(error)) {
-        if (error.response) {
-          throw new Error(
-            `Limitless API error ${error.response.status}: ${error.response.statusText}`
-          );
+    for (let attempt = 0; attempt <= requestRetries; attempt += 1) {
+      try {
+        response = await axios.get(`${apiUrl}/${endpoint}`, {
+          headers: {
+            "X-API-Key": apiKey,
+            "Content-Type": "application/json",
+          },
+          params,
+          timeout: timeoutMs,
+        });
+        break;
+      } catch (error) {
+        if (!axios.isAxiosError(error)) throw error;
+
+        const status = error.response?.status;
+        const code = error.code;
+        const noResponse = Boolean(error.request && !error.response);
+        const shouldRetry =
+          noResponse ||
+          status === 429 ||
+          (typeof status === "number" && status >= 500) ||
+          code === "ECONNABORTED" ||
+          code === "ECONNRESET" ||
+          code === "ETIMEDOUT" ||
+          code === "EAI_AGAIN" ||
+          code === "ENOTFOUND";
+
+        const canRetry = shouldRetry && attempt < requestRetries;
+        if (!canRetry) {
+          if (status) {
+            throw new Error(
+              `Limitless API error ${status}: ${error.response.statusText}`
+            );
+          }
+          if (noResponse) {
+            throw new Error(
+              `Limitless API network error: no response from ${apiUrl}/${endpoint}`
+            );
+          }
+          throw new Error(`Limitless API request error: ${error.message}`);
         }
-        if (error.request) {
-          throw new Error(
-            `Limitless API network error: no response from ${apiUrl}/${endpoint}`
-          );
-        }
+
+        const backoff = retryDelayMs * 2 ** attempt;
+        await sleep(backoff);
       }
-      throw error;
     }
 
     const lifelogs = response.data?.data?.lifelogs || [];
