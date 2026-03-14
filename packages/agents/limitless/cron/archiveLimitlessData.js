@@ -1,6 +1,6 @@
-require("dotenv").config({ path: ".env.local" });
+require("dotenv").config({ path: require("path").resolve(__dirname, "../../../../.env.local") });
 const crypto = require("crypto");
-const pool = require("../db");
+const pool = require("@secondbrain/db");
 const { getLifelogs, getChats, downloadAudioRange } = require("../services/limitless");
 
 function toApiDate(date) {
@@ -428,7 +428,7 @@ async function syncAudio({ startDate, endDate, audioSources }) {
 
   try {
     const lifelogRanges = await getLifelogRangesForAudio(startDate, endDate);
-    const maxAudioWindowMs = 2 * 60 * 60 * 1000; // API limit: <= 2 hours
+    const maxAudioWindowMs = 2 * 60 * 60 * 1000;
     const segments = [];
     for (const range of lifelogRanges) {
       const originalStartMs = new Date(range.start_time).getTime();
@@ -600,20 +600,21 @@ async function run() {
 
   console.log("Archive sync complete:");
   console.log(JSON.stringify(summary, null, 2));
-  await pool.end();
-  process.exit(0);
 }
 
 if (require.main === module) {
-  run().catch(async (error) => {
-    console.error("Archive sync failed:", error);
-    try {
-      await pool.end();
-    } catch (endError) {
-      console.error("Failed to close pool:", endError);
-    }
-    process.exit(1);
-  });
+  run()
+    .then(() => pool.end())
+    .then(() => process.exit(0))
+    .catch(async (error) => {
+      console.error("Archive sync failed:", error);
+      try {
+        await pool.end();
+      } catch (endError) {
+        console.error("Failed to close pool:", endError);
+      }
+      process.exit(1);
+    });
 }
 
 module.exports = { run };

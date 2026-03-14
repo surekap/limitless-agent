@@ -1,5 +1,5 @@
-require("dotenv").config({ path: ".env.local" });
-const pool = require("../db");
+require("dotenv").config({ path: require("path").resolve(__dirname, "../../../../.env.local") });
+const pool = require("@secondbrain/db");
 const { getLifelogs } = require("../services/limitless");
 
 function toApiDate(date) {
@@ -85,8 +85,7 @@ async function run() {
 
   if (startDate > endDate) {
     console.log("Start date is after end date. Nothing to fetch.");
-    await pool.end();
-    process.exit(0);
+    return;
   }
 
   console.log(
@@ -131,11 +130,16 @@ async function run() {
   }
 
   console.log(`Done. Fetched ${totalFetched} and attempted to save ${totalSaved} lifelogs.`);
-
-  await pool.end();
-  process.exit(0);
 }
 
-if (require.main === module) run();
+if (require.main === module) {
+  run()
+    .then(() => pool.end())
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error(err);
+      pool.end().finally(() => process.exit(1));
+    });
+}
 
 module.exports = { run, saveLifelogsToDB, getLatestStartTime };

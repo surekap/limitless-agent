@@ -1,0 +1,24 @@
+{
+    "name": "@secondbrain/agent-limitless",
+    "version": "2.0.0",
+    "main": "index.js",
+    "license": "MIT",
+    "description": "Limitless agent - downloads and processes lifelogs from Limitless.ai into the limitless postgres schema",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "node agent.js",
+        "fetch": "node cron/fetchLifelogs.js",
+        "archive": "node cron/archiveLimitlessData.js",
+        "init-db": "psql $DATABASE_URL < sql/schema.sql"
+    },
+    "dependencies": {
+        "@anthropic-ai/sdk": "^0.32.1",
+        "@notionhq/client": "^4.0.2",
+        "@secondbrain/db": "*",
+        "axios": "^1.9.0",
+        "dotenv": "^16.5.0",
+        "moment-timezone": "^0.6.0",
+        "node-cron": "^4.1.0",
+        "pg": "^8.20.0"
+    }
+}

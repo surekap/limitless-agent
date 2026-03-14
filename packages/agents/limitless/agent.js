@@ -1,4 +1,4 @@
-require("dotenv").config({ path: "./.env.local" });
+require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env.local") });
 const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
 const fs = require("fs");
@@ -10,13 +10,10 @@ class LifelogAgent {
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
 
-    // Initialize database connection using DATABASE_URL
     this.db = new Pool({ connectionString: process.env.DATABASE_URL });
 
-    // Test database connection
     this.initDatabase();
 
-    // Initialize MCP tools dynamically
     this.tools = this.loadMCPTools();
   }
 
@@ -81,7 +78,7 @@ class LifelogAgent {
 
     - **Research Tools**: Stock research, market analysis, data gathering
     - **Communication Tools**: Email reading, email sending
-    - **Task Management**: Todo creation, todo commenting, task tracking  
+    - **Task Management**: Todo creation, todo commenting, task tracking
     - **Data Organization**: Notion database creation, data entry, structure management
 
     ## CRITICAL DATABASE WORKFLOW
@@ -91,11 +88,11 @@ class LifelogAgent {
     1. **Create Database**: Use create_database to create new databases
     2. **Get Schema**: IMMEDIATELY call find_database to get the EXACT column names that were created
     3. **Use Exact Columns**: Use the EXACT column names from find_database in your add_to_database calls
-    
+
     **NEVER guess column names**. Always use find_database first to see the actual schema.
-    
+
     Example:
-    - create_database(name="Wine Collection", type="wines") 
+    - create_database(name="Wine Collection", type="wines")
     - find_database(name="Wine Collection") → returns exact columns like "Wine Name", "Vintage Year", "Rating"
     - add_to_database(row_data={"Wine Name": "Château Margaux", "Vintage Year": 2015, "Rating": 95})
 
@@ -103,7 +100,7 @@ class LifelogAgent {
 
     For identified tasks, structure your response as:
 
-    
+
     TASK IDENTIFIED: [Brief task summary]
 
     EXECUTION PLAN:
@@ -112,7 +109,7 @@ class LifelogAgent {
     3. [Continue...]
 
     EXECUTING:
-    
+
 
     Then proceed with actual tool calls in sequence.
 
@@ -143,9 +140,8 @@ class LifelogAgent {
         tool.getToolDefinitions()
       );
 
-      // Multi-turn conversation to handle complex workflows
       const messages = [{ role: "user", content: prompt }];
-      let maxTurns = 5; // Prevent infinite loops
+      let maxTurns = 5;
       let turnCount = 0;
 
       while (turnCount < maxTurns) {
@@ -167,7 +163,6 @@ class LifelogAgent {
         let hasToolCalls = false;
         const toolResults = [];
 
-        // Process tool calls and collect results
         for (const contentBlock of response.content) {
           if (contentBlock.type === "tool_use") {
             console.log(`📞 Tool call found: ${contentBlock.name}`);
@@ -189,11 +184,9 @@ class LifelogAgent {
           }
         }
 
-        // Add Claude's response to conversation
         messages.push({ role: "assistant", content: response.content });
 
         if (hasToolCalls) {
-          // Add tool results and ask Claude to continue
           messages.push({
             role: "user",
             content: toolResults.concat([
@@ -204,7 +197,6 @@ class LifelogAgent {
             ]),
           });
         } else {
-          // No more tool calls, check if workflow is complete
           const lastResponse =
             response.content.find((block) => block.type === "text")?.text || "";
           if (
@@ -293,23 +285,13 @@ class LifelogAgent {
     }
   }
 
-  /**
-   * Dynamically load all MCP tools from the tools directory
-   *
-   * Searches for files matching the pattern '*-mcp.js' in the tools directory
-   * and loads them as MCP tool classes. Ignores files with 'disabled' in the name.
-   *
-   * @returns {Array} Array of instantiated MCP tool objects
-   */
   loadMCPTools() {
     const toolsDir = path.join(__dirname, "tools");
     const tools = [];
 
     try {
-      // Get all files in the tools directory
       const files = fs.readdirSync(toolsDir);
 
-      // Filter for MCP files (pattern: *-mcp.js) and exclude disabled ones
       const mcpFiles = files.filter(
         (file) => file.endsWith("-mcp.js") && !file.includes("disabled")
       );
@@ -318,7 +300,6 @@ class LifelogAgent {
         `🔍 Found ${mcpFiles.length} MCP tools: ${mcpFiles.join(", ")}`
       );
 
-      // Load each MCP tool
       for (const file of mcpFiles) {
         try {
           const toolPath = path.join(toolsDir, file);
@@ -326,7 +307,6 @@ class LifelogAgent {
           const toolInstance = new MCPClass();
           tools.push(toolInstance);
 
-          // Get tool name from class name or filename
           const toolName = MCPClass.name || file.replace("-mcp.js", "");
           console.log(`✅ Loaded MCP tool: ${toolName}`);
         } catch (error) {
@@ -359,7 +339,6 @@ class LifelogAgent {
 
       for (const lifelog of lifelogs) {
         await this.processLifelog(lifelog);
-        // Small delay to avoid rate limits
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
 
@@ -370,19 +349,15 @@ class LifelogAgent {
   }
 }
 
-// Export for use in other files
 module.exports = LifelogAgent;
 
-// Run if called directly
 if (require.main === module) {
   const agent = new LifelogAgent();
 
-  // Process batch every 30 seconds for demo
   setInterval(async () => {
     await agent.processBatch();
   }, 30000);
 
-  // Initial run
   agent.processBatch();
 
   console.log("🤖 Lifelog Agent started - processing every 30 seconds");

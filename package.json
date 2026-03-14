@@ -1,33 +1,15 @@
 {
-    "name": "limitless",
-    "version": "2.0.0",
-    "main": "agent.js",
-    "license": "MIT",
-    "description": "Agent-based lifelog processor with MCP tools (98% code reduction from v1.0)",
+    "name": "secondbrain",
+    "version": "1.0.0",
+    "private": true,
+    "workspaces": [
+        "packages/db",
+        "packages/agents/*"
+    ],
     "scripts": {
-        "start": "node start-production.js",
-        "dev": "node agent.js",
-        "agent": "node agent.js",
-        "fetch": "node cron/fetchLifelogs.js",
-        "archive": "node cron/archiveLimitlessData.js",
-        "init-db": "psql postgres://postgres:catacomb@localhost/ww < sql/schema.sql",
-        "test:agent": "node tests/test-agent.js",
-        "test:real": "node tests/test-real-lifelogs.js",
-        "test:stock": "node tests/test-stock-saving.js",
-        "test:improved": "node tests/test-improved-agent.js",
-        "test:comprehensive": "node tests/comprehensive-test.js",
-        "test:debug": "node tests/debug-wine-test.js",
-        "test:final": "node tests/final-test.js",
-        "test:check": "node tests/check-created-data.js",
-        "old-system": "node old-system-backup/server.js"
-    },
-    "dependencies": {
-        "@anthropic-ai/sdk": "^0.32.1",
-        "@notionhq/client": "^4.0.2",
-        "axios": "^1.9.0",
-        "dotenv": "^16.5.0",
-        "moment-timezone": "^0.6.0",
-        "node-cron": "^4.1.0",
-        "pg": "^8.20.0"
+        "limitless": "npm start --workspace=packages/agents/limitless",
+        "limitless:fetch": "npm run fetch --workspace=packages/agents/limitless",
+        "limitless:archive": "npm run archive --workspace=packages/agents/limitless",
+        "init-db": "npm run init-db --workspace=packages/agents/limitless"
     }
 }
