@@ -1,6 +1,6 @@
 require("dotenv").config({ path: "./.env.local" });
 const Anthropic = require("@anthropic-ai/sdk");
-const mysql = require("mysql2/promise");
+const { Pool } = require("pg");
 const fs = require("fs");
 const path = require("path");
 
@@ -11,7 +11,7 @@ class LifelogAgent {
     });
 
     // Initialize database connection using DATABASE_URL
-    this.db = mysql.createPool(process.env.DATABASE_URL);
+    this.db = new Pool({ connectionString: process.env.DATABASE_URL });
 
     // Test database connection
     this.initDatabase();
@@ -269,16 +269,16 @@ class LifelogAgent {
   }
 
   async getUnprocessedLifelogs(limit = 10) {
-    const [rows] = await this.db.query(
-      "SELECT * FROM lifelogs WHERE processed = 0 ORDER BY start_time DESC LIMIT ?",
+    const { rows } = await this.db.query(
+      "SELECT * FROM lifelogs WHERE processed = FALSE ORDER BY start_time DESC LIMIT $1",
       [limit]
     );
     return rows;
   }
 
   async markLifelogProcessed(lifelogId) {
-    const [result] = await this.db.query(
-      "UPDATE lifelogs SET processed = 1 WHERE id = ?",
+    const result = await this.db.query(
+      "UPDATE lifelogs SET processed = TRUE WHERE id = $1",
       [lifelogId]
     );
     return result;
@@ -286,7 +286,7 @@ class LifelogAgent {
 
   async initDatabase() {
     try {
-      await this.db.execute("SELECT 1");
+      await this.db.query("SELECT 1");
       console.log("✅ Database connection established");
     } catch (error) {
       console.error("❌ Database connection failed:", error.message);

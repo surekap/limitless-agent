@@ -9,7 +9,8 @@
         "dev": "node agent.js",
         "agent": "node agent.js",
         "fetch": "node cron/fetchLifelogs.js",
-        "init-db": "mysql -u root -p < sql/schema.sql",
+        "archive": "node cron/archiveLimitlessData.js",
+        "init-db": "psql postgres://postgres:catacomb@localhost/ww < sql/schema.sql",
         "test:agent": "node tests/test-agent.js",
         "test:real": "node tests/test-real-lifelogs.js",
         "test:stock": "node tests/test-stock-saving.js",
@@ -26,7 +27,7 @@
         "axios": "^1.9.0",
         "dotenv": "^16.5.0",
         "moment-timezone": "^0.6.0",
-        "mysql2": "^3.14.1",
-        "node-cron": "^4.1.0"
+        "node-cron": "^4.1.0",
+        "pg": "^8.20.0"
     }
 }

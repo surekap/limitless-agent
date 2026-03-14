@@ -6,7 +6,7 @@ function toApiDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-function toMySqlDatetime(value) {
+function toDatetimeStr(value) {
   return new Date(value).toISOString().slice(0, 19).replace("T", " ");
 }
 
@@ -19,19 +19,24 @@ function parseDateInput(value, label) {
 }
 
 async function saveLifelogsToDB(logs) {
-  const conn = await pool.getConnection();
+  const conn = await pool.connect();
 
   try {
     for (const log of logs) {
       const startValue = log.startTime || log.start_time || log.start;
       const endValue = log.endTime || log.end_time || log.end;
-      const startTime = startValue ? toMySqlDatetime(startValue) : null;
-      const endTime = endValue ? toMySqlDatetime(endValue) : null;
+      const startTime = startValue ? toDatetimeStr(startValue) : null;
+      const endTime = endValue ? toDatetimeStr(endValue) : null;
       const contents = log.contents ?? "";
 
       await conn.query(
-        `INSERT INTO lifelogs (id, title, start_time, end_time, contents, markdown) VALUES (?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE title = VALUES(title), start_time = VALUES(start_time), end_time = VALUES(end_time), contents = VALUES(contents), markdown = VALUES(markdown)`,
+        `INSERT INTO lifelogs (id, title, start_time, end_time, contents, markdown) VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (id) DO UPDATE SET
+          title = EXCLUDED.title,
+          start_time = EXCLUDED.start_time,
+          end_time = EXCLUDED.end_time,
+          contents = EXCLUDED.contents,
+          markdown = EXCLUDED.markdown`,
         [
           log.id,
           log.title,
@@ -49,11 +54,9 @@ async function saveLifelogsToDB(logs) {
 }
 
 async function getLatestStartTime() {
-  const conn = await pool.getConnection();
+  const conn = await pool.connect();
   try {
-    // Get the absolute latest start_time without any date filtering
-    // This ensures we always resume from the most recent lifelog
-    const [rows] = await conn.query(
+    const { rows } = await conn.query(
       `SELECT MAX(start_time) AS latest_start_time FROM lifelogs`
     );
     return rows[0]?.latest_start_time || null;
