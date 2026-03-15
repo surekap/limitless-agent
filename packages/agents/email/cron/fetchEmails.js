@@ -1,0 +1,280 @@
+'use strict';
+
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../../../.env.local') });
+
+const { simpleParser } = require('mailparser');
+const pool = require('@secondbrain/db');
+const { GmailClient } = require('../services/gmail');
+
+// ── Config ───────────────────────────────────────────────────────────────────
+
+function loadAccounts() {
+  const accounts = [];
+  let i = 1;
+  while (process.env[`GMAIL_EMAIL_${i}`]) {
+    const email       = process.env[`GMAIL_EMAIL_${i}`].trim();
+    const appPassword = process.env[`GMAIL_APP_PASSWORD_${i}`];
+    if (!appPassword) {
+      throw new Error(`GMAIL_APP_PASSWORD_${i} is missing for account ${email}`);
+    }
+    accounts.push({ email, appPassword: appPassword.trim() });
+    i++;
+  }
+  if (accounts.length === 0) {
+    throw new Error(
+      'No Gmail accounts configured. Add GMAIL_EMAIL_1 and GMAIL_APP_PASSWORD_1 to .env.local'
+    );
+  }
+  return accounts;
+}
+
+// ── Database helpers (email schema) ──────────────────────────────────────────
+
+async function upsertAccount(email) {
+  const { rows } = await pool.query(
+    `INSERT INTO email.accounts (email)
+     VALUES ($1)
+     ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+     RETURNING *`,
+    [email]
+  );
+  return rows[0];
+}
+
+async function emailExists(accountId, gmailUid) {
+  const { rows } = await pool.query(
+    'SELECT 1 FROM email.emails WHERE account_id = $1 AND gmail_uid = $2',
+    [accountId, String(gmailUid)]
+  );
+  return rows.length > 0;
+}
+
+async function saveEmail(accountId, emailData) {
+  await pool.query(
+    `INSERT INTO email.emails (
+       account_id, message_id, gmail_uid, thread_id,
+       subject, from_address, to_addresses, cc_addresses, bcc_addresses,
+       reply_to, date, received_at, body_text, body_html,
+       raw_headers, attachments, labels, is_read
+     ) VALUES (
+       $1,  $2,  $3,  $4,
+       $5,  $6,  $7,  $8,  $9,
+       $10, $11, $12, $13, $14,
+       $15, $16, $17, $18
+     )
+     ON CONFLICT (account_id, gmail_uid) DO NOTHING`,
+    [
+      accountId,
+      emailData.message_id    || null,
+      String(emailData.gmail_uid),
+      emailData.thread_id     || null,
+      emailData.subject       || null,
+      emailData.from_address  || null,
+      emailData.to_addresses  || [],
+      emailData.cc_addresses  || [],
+      emailData.bcc_addresses || [],
+      emailData.reply_to      || null,
+      emailData.date          || null,
+      emailData.received_at   || new Date(),
+      emailData.body_text     || null,
+      emailData.body_html     || null,
+      emailData.raw_headers   ? JSON.stringify(emailData.raw_headers) : null,
+      emailData.attachments   ? JSON.stringify(emailData.attachments) : null,
+      emailData.labels        || [],
+      emailData.is_read       ?? false,
+    ]
+  );
+}
+
+async function updateAccountSyncTime(accountId) {
+  await pool.query(
+    'UPDATE email.accounts SET last_synced_at = NOW() WHERE id = $1',
+    [accountId]
+  );
+}
+
+// ── Email parsing ─────────────────────────────────────────────────────────────
+
+async function parseEmail(rawSource, uid, flags = []) {
+  const parsed = await simpleParser(rawSource);
+
+  const is_read = Array.isArray(flags) && flags.includes('\\Seen');
+
+  const raw_headers = {};
+  if (parsed.headers) {
+    for (const [key, value] of parsed.headers) {
+      raw_headers[key] = Array.isArray(value) ? value : String(value);
+    }
+  }
+
+  return {
+    gmail_uid:     uid,
+    message_id:    parsed.messageId || String(uid),
+    thread_id:     null,  // populated by caller from X-GM-THRID
+    subject:       parsed.subject || '',
+    from_address:  parsed.from?.text || '',
+    to_addresses:  parsed.to?.value?.map((a) => a.address).filter(Boolean)  || [],
+    cc_addresses:  parsed.cc?.value?.map((a) => a.address).filter(Boolean)  || [],
+    bcc_addresses: parsed.bcc?.value?.map((a) => a.address).filter(Boolean) || [],
+    reply_to:      parsed.replyTo?.text || null,
+    date:          parsed.date || null,
+    received_at:   new Date(),
+    body_text:     parsed.text  || null,
+    body_html:     parsed.html  || null,
+    raw_headers,
+    attachments: (parsed.attachments || []).map((a) => ({
+      filename:    a.filename    || null,
+      contentType: a.contentType || null,
+      size:        a.size        || 0,
+    })),
+    labels:  [],  // populated by caller from X-GM-LABELS
+    is_read,
+  };
+}
+
+// ── Account processing ────────────────────────────────────────────────────────
+
+async function processAccount(account, gmailClient, logger, options = {}) {
+  const { batchSize = 50, mailbox = 'INBOX' } = options;
+
+  let processed = 0;
+  let skipped   = 0;
+  let errors    = 0;
+
+  // 1. Ensure the tracking label exists in Gmail
+  await gmailClient.ensurePsLabelExists();
+
+  // 2. Get UIDs that haven't received the "ps" label yet
+  const uids = await gmailClient.getUnprocessedUIDs(mailbox);
+  logger.info(`Found ${uids.length} message(s) to process in ${mailbox}`);
+
+  if (uids.length === 0) {
+    await updateAccountSyncTime(account.id);
+    return { processed, skipped, errors };
+  }
+
+  // 3. Process in batches (sequential to respect Gmail rate limits)
+  const totalBatches = Math.ceil(uids.length / batchSize);
+
+  for (let b = 0; b < uids.length; b += batchSize) {
+    const batch       = uids.slice(b, b + batchSize);
+    const batchNumber = Math.floor(b / batchSize) + 1;
+
+    logger.debug(
+      `Batch ${batchNumber}/${totalBatches} — ` +
+      `UIDs ${batch[0]}…${batch[batch.length - 1]}`
+    );
+
+    for (const uid of batch) {
+      try {
+        // Skip if already stored (handles interrupted previous runs)
+        if (await emailExists(account.id, uid)) {
+          logger.debug(`UID ${uid} already in DB — skipping`);
+          skipped++;
+          // Still apply the label in case it was missed last time
+          await gmailClient.applyPsLabel(uid).catch(() => {});
+          continue;
+        }
+
+        // Fetch raw message — read-only; \Seen flag is never set
+        const { source, flags, labels, thrid } = await gmailClient.fetchMessage(uid);
+
+        // Parse
+        const emailData = await parseEmail(source, uid, flags);
+        if (thrid)  emailData.thread_id = thrid;
+        if (labels) emailData.labels    = labels;
+
+        // Persist
+        await saveEmail(account.id, emailData);
+
+        // Mark as processed in Gmail (COPY to "ps" mailbox = add label)
+        await gmailClient.applyPsLabel(uid);
+
+        processed++;
+        logger.info(`Saved UID ${uid}  subject="${emailData.subject}"`);
+
+      } catch (err) {
+        errors++;
+        logger.error(`Failed on UID ${uid}: ${err.message}`);
+      }
+    }
+
+    logger.info(
+      `Batch ${batchNumber}/${totalBatches} done — ` +
+      `processed: ${processed}, skipped: ${skipped}, errors: ${errors}`
+    );
+  }
+
+  // 4. Update sync timestamp
+  await updateAccountSyncTime(account.id);
+
+  return { processed, skipped, errors };
+}
+
+// ── Main run function ─────────────────────────────────────────────────────────
+
+async function run() {
+  const { createLogger } = require('../logger');
+  const log = createLogger('email');
+
+  const accounts  = loadAccounts();
+  const batchSize = parseInt(process.env.BATCH_SIZE || '50', 10);
+  const mailbox   = process.env.MAILBOX || 'INBOX';
+
+  log.info(`Starting email sync for ${accounts.length} account(s)`);
+
+  const summary = { processed: 0, skipped: 0, errors: 0 };
+
+  // Sequential processing — respects Gmail rate limits per account
+  for (const accountConfig of accounts) {
+    const accountLog = log.child(accountConfig.email);
+    accountLog.info('Starting sync');
+
+    let gmailClient;
+    try {
+      const account = await upsertAccount(accountConfig.email);
+
+      gmailClient = new GmailClient(accountConfig.email, accountConfig.appPassword, accountLog);
+      await gmailClient.connect();
+
+      const result = await processAccount(account, gmailClient, accountLog, { batchSize, mailbox });
+
+      summary.processed += result.processed;
+      summary.skipped   += result.skipped;
+      summary.errors    += result.errors;
+
+      accountLog.info(
+        `Sync complete — processed: ${result.processed}, ` +
+        `skipped: ${result.skipped}, errors: ${result.errors}`
+      );
+
+    } catch (err) {
+      accountLog.error(`Account sync failed: ${err.message}`);
+      summary.errors++;
+    } finally {
+      if (gmailClient) {
+        await gmailClient.disconnect().catch(() => {});
+      }
+    }
+  }
+
+  log.info(
+    `All accounts processed — ` +
+    `total processed: ${summary.processed}, ` +
+    `skipped: ${summary.skipped}, ` +
+    `errors: ${summary.errors}`
+  );
+
+  return summary;
+}
+
+if (require.main === module) {
+  run()
+    .then((summary) => pool.end().then(() => process.exit(summary.errors > 0 ? 1 : 0)))
+    .catch((err) => {
+      console.error('Fatal error:', err);
+      pool.end().finally(() => process.exit(1));
+    });
+}
+
+module.exports = { run };

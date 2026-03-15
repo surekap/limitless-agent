@@ -1,154 +1,280 @@
-# Limitless v2.0 - Agent-based Lifelog Processor
+# secondbrain
 
-**🎯 98% Code Reduction**: Transformed from 11,020 lines (40 files) to ~300 lines (4 files)
+A personal intelligence system that automatically synthesizes your email, voice recordings, and WhatsApp conversations into actionable insights about your projects and relationships.
 
-## Overview
-
-Limitless v2.0 replaces complex intent processing workflows with a simple agent-based approach using Claude and MCP (Model Context Protocol) tools. The agent naturally understands user requests and chains tool calls without complex orchestration logic.
+---
 
 ## Architecture
 
-### v1.0 (Old System - Backed up)
-- ❌ 11,020 lines across 40 files
-- ❌ Complex intent extraction and workflow orchestration  
-- ❌ Multiple abstraction layers violating SOLID principles
-- ❌ Difficult to maintain and extend
-
-### v2.0 (Current System)
-- ✅ ~300 lines across 4 files
-- ✅ Natural language processing with Claude
-- ✅ Direct tool calling with MCP protocol
-- ✅ Simple, maintainable architecture
-
-## Project Structure
-
 ```
-limitless/
-├── agent.js                    # Main agent class (~300 lines)
-├── start-production.js         # Production deployment script
-├── tools/                      # MCP tool implementations
-│   ├── todoist-mcp.js         # Task management integration
-│   ├── notion-mcp.js          # Database management integration
-│   └── stock-mcp.js           # Stock analysis integration
-├── tests/                      # All test files organized in subfolder
-│   ├── test-agent.js          # Basic agent functionality tests
-│   ├── test-real-lifelogs.js  # Real lifelog processing tests
-│   ├── test-stock-saving.js   # Stock analysis saving tests
-│   ├── test-improved-agent.js # Database reuse logic tests
-│   ├── comprehensive-test.js  # Full workflow tests
-│   ├── debug-wine-test.js     # Wine database debug tests
-│   ├── final-test.js          # Final integration tests
-│   └── check-created-data.js  # Data validation tests
-├── cron/                       # Lifelog fetching (kept from v1.0)
-│   └── fetchLifelogs.js       # Fetch lifelogs from Limitless API
-├── old-system-backup/          # Complete v1.0 system backup
-└── sql/                        # Database schema
-    └── schema.sql             # MySQL table definitions
+┌──────────────────────────────────────────────────────┐
+│                  Data Sources                        │
+│   Gmail · Limitless.ai lifelogs · WhatsApp           │
+└──────────┬───────────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────┐
+│                  Ingestion Agents                    │
+│   Email Agent · Limitless Agent                      │
+└──────────┬───────────────────────────────────────────┘
+           │  writes to Postgres
+           ▼
+┌──────────────────────────────────────────────────────┐
+│                  PostgreSQL                          │
+│   email.*  ·  limitless.*  ·  public.messages        │
+└──────────┬───────────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────┐
+│               Analysis Agents (Claude-powered)       │
+│   Projects Agent · Relationships Agent               │
+└──────────┬───────────────────────────────────────────┘
+           │  writes to projects.*  relationships.*
+           ▼
+┌──────────────────────────────────────────────────────┐
+│                  Control Panel UI                    │
+│   Next.js (port 4000) + Express API (port 4001)      │
+└──────────────────────────────────────────────────────┘
 ```
 
-## File Documentation
+All agents share a single Postgres database via `packages/db`. Analysis agents use the Anthropic Claude API to extract structured intelligence from raw communications.
 
-Each file is comprehensively documented with:
-- **Purpose and functionality**: What the file does and why it exists
-- **Key features**: Important capabilities and improvements over v1.0
-- **API documentation**: Method signatures, parameters, and return values
-- **Environment variables**: Required configuration
-- **Usage examples**: How to use the file/functions
+---
 
-### Key Files Overview
+## Packages
 
-- **`agent.js`**: Core agent with Claude + MCP integration (~300 lines vs 11,020 in v1.0)
-- **`start-production.js`**: Production deployment with cron scheduling and monitoring
-- **`tools/notion-mcp.js`**: Intelligent database management with duplicate prevention
-- **`tools/stock-mcp.js`**: Real-time stock analysis with Perplexity AI integration
-- **`tools/todoist-mcp.js`**: Simple task management with natural language processing
-- **`tests/*`**: Comprehensive test suite organized by functionality
+```
+packages/
+├── db/                     Shared Postgres connection pool
+├── agents/
+│   ├── email/              Gmail IMAP sync → email.*
+│   ├── limitless/          Limitless.ai lifelog fetch + Claude processing
+│   ├── projects/           Project discovery & tracking (Claude)
+│   └── relationships/      Contact profiling & relationship graph (Claude)
+└── ui/
+    ├── app/                Next.js 14 frontend (port 4000)
+    ├── public/             Legacy static HTML pages
+    └── server.js           Express API server (port 4001)
+```
 
-## Key Features
+---
 
-- **Database Management**: Creates and populates Notion databases intelligently
-- **Stock Analysis**: Comprehensive analysis with automatic saving
-- **Task Creation**: Smart Todoist task management
-- **Multi-turn Conversations**: Handles complex workflows automatically
-- **Database Reuse**: Prevents duplicates, reuses existing databases
+## Agents
 
-## Usage
+### Email Agent
 
-### Production
+Syncs one or more Gmail inboxes into Postgres using IMAP.
+
+- Polls every 15 minutes
+- Upserts messages with full metadata (subject, body, headers, attachments, labels)
+- De-duplicates via `gmail_uid`
+
+**Schema:** `email.accounts`, `email.emails`
+
+---
+
+### Limitless Agent
+
+Fetches lifelogs from the Limitless.ai API and processes them with Claude.
+
+- Fetches new lifelogs every 5 minutes
+- Processes unprocessed lifelogs every 30 seconds
+- Claude uses MCP-style tools to take actions: create Notion databases, add Todoist tasks, research stocks
+- Archives chat history and reminders
+
+**Schema:** `limitless.lifelogs`, `limitless.lifelog_processing`, `limitless.handlers`, `limitless.handler_logs`
+
+---
+
+### Projects Agent
+
+Discovers and tracks projects from all communication sources using Claude.
+
+**How it works:**
+1. Gathers email thread subjects, lifelog titles, and WhatsApp chat names
+2. Claude identifies distinct projects, initiatives, and matters
+3. Upserts projects into the DB (case-insensitive name matching)
+4. Classifies emails, lifelogs, and WhatsApp messages to projects
+5. Re-analyzes projects that received new communications
+6. Generates insights: blockers, risks, next actions, opportunities
+
+Runs every 12 hours (incremental after first run — only processes new communications).
+
+**Schema:** `projects.projects`, `projects.project_communications`, `projects.project_insights`, `projects.analysis_runs`
+
+---
+
+### Relationships Agent
+
+Builds and maintains contact profiles from WhatsApp, email, and Limitless lifelogs.
+
+**How it works:**
+1. Extracts direct chat contacts and group chats from WhatsApp
+2. Analyses each contact with Claude: identifies company, job title, relationship type/strength, tags
+3. Deep-analyses group chats: classifies group type, your role, key topics, and communication advice
+4. Processes email senders and links them to contact profiles
+5. Extracts named participants from Limitless transcripts
+6. Generates insights: awaiting reply, unread groups, opportunities, action needed
+
+Runs every 12 hours (incremental).
+
+**Schema:** `relationships.contacts`, `relationships.communications`, `relationships.groups`, `relationships.insights`, `relationships.analysis_runs`
+
+---
+
+### Manual Overrides
+
+Any field you edit in the UI is recorded in a `manual_overrides JSONB` column on both `projects.projects` and `relationships.contacts`. Agents will never overwrite manually-set fields, and Claude is told about them as ground truth when generating new analysis.
+
+To hand a field back to agents, send `_clearOverrides: ['field_name']` in a PATCH request.
+
+---
+
+## UI
+
+The control panel is a **Next.js 14** app (port 4000) that proxies `/api/*` to an **Express** API server (port 4001).
+
+### Pages
+
+| URL | Description |
+|-----|-------------|
+| `/` | Agent dashboard — start/stop agents, view logs, edit config |
+| `/relationships` | Contact list with search, filtering, manual editing, re-analysis |
+| `/groups` | WhatsApp group intelligence — type, your role, topics, advice |
+| `/projects` | Project tracker — status, health, insights, communications |
+| `/search` | Full-text search across all communications |
+
+### Log viewer
+
+Logs are polled per-agent when the log panel is open. The periodic 5-second status poll surgically patches only the mutable DOM (status pill, button, stats) — it never touches the log viewer, so log output is never wiped.
+
+---
+
+## Setup
+
+### Prerequisites
+
+- Node.js 18+
+- PostgreSQL 14+
+- Anthropic API key
+- (Optional) Limitless.ai API key, Notion token, Todoist token
+
+### Install
+
 ```bash
-npm start              # Full production mode with cron scheduling
+git clone <repo>
+cd secondbrain
+npm install
 ```
 
-### Development  
+### Configure
+
+Create `.env.local` in the repo root:
+
 ```bash
-npm run dev            # Agent only (no cron scheduling)
-npm run agent          # Same as dev
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/secondbrain
+
+# AI
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Limitless (optional)
+LIMITLESS_API_KEY=...
+LIMITLESS_TIMEZONE=Asia/Kolkata
+FETCH_DAYS=1
+
+# Gmail (repeat _2, _3 etc. for multiple accounts)
+GMAIL_EMAIL_1=you@gmail.com
+GMAIL_APP_PASSWORD_1=xxxx xxxx xxxx xxxx
+
+# Integrations (optional, used by Limitless agent tools)
+NOTION_TOKEN=...
+TODOIST_API_TOKEN=...
+
+# UI
+UI_PORT=4001
 ```
 
-### Testing
+### Initialize the database
+
+Each agent initialises its own schema automatically when it starts. You can also run the schemas directly:
+
 ```bash
-npm run test:agent          # Test basic agent functionality
-npm run test:real           # Test with real lifelogs  
-npm run test:stock          # Test stock analysis saving
-npm run test:improved       # Test database reuse logic
-npm run test:comprehensive  # Full workflow testing
-npm run test:debug          # Debug wine database testing
-npm run test:final          # Final integration tests
-npm run test:check          # Check created data validation
+psql $DATABASE_URL -f packages/agents/email/sql/schema.sql
+psql $DATABASE_URL -f packages/agents/limitless/sql/schema.sql
+psql $DATABASE_URL -f packages/agents/projects/sql/schema.sql
+psql $DATABASE_URL -f packages/agents/relationships/sql/schema.sql
 ```
 
-### Database
+---
+
+## Running
+
+### Development (UI + API server together)
+
 ```bash
-npm run init-db        # Initialize MySQL schema
-npm run fetch          # Manually fetch lifelogs
+npm run ui:dev
 ```
 
-### Legacy
+This starts:
+- `node server.js` — Express API on port 4001
+- `next dev -p 4000` — Next.js on port 4000
+
+### Start individual agents
+
 ```bash
-npm run old-system     # Run backed-up v1.0 system (for reference)
+npm run email           # Email sync agent
+npm run limitless       # Limitless processing agent
+npm run relationships   # Relationships analysis agent
+npm run projects        # Projects analysis agent
 ```
 
-## Environment Variables
+### Or manage agents from the UI
 
-Required in `.env.local`:
-```bash
-ANTHROPIC_API_KEY=     # Claude API key
-NOTION_TOKEN=          # Notion integration token  
-TODOIST_API_TOKEN=     # Todoist API token
-PERPLEXITY_API_KEY=    # Perplexity API key
-DATABASE_URL=          # MySQL connection string
+Open `http://localhost:4000`, start/stop agents from the dashboard.
+
+---
+
+## npm Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run ui:dev` | Start UI (Next.js + Express API) |
+| `npm run ui` | Production UI |
+| `npm run api` | Express API server only |
+| `npm run email` | Email agent |
+| `npm run limitless` | Limitless agent |
+| `npm run relationships` | Relationships agent |
+| `npm run projects` | Projects agent |
+
+---
+
+## Data Flow: Manual Overrides
+
+When you edit a field in the UI (e.g. change a contact's relationship type to `friend`):
+
+1. The PATCH endpoint updates the field **and** writes `{ "relationship_type": { "value": "friend", "set_at": "..." } }` into `manual_overrides`
+2. On the next agent run, the SQL `UPDATE` uses `CASE WHEN manual_overrides ? 'relationship_type' THEN relationship_type ELSE $new_value END` — the agent's value is discarded
+3. Claude receives the override as prompt context: *"User-confirmed facts (treat as ground truth): relationship_type: 'friend'"*
+4. The reanalyze endpoint returns `locked_fields: ['relationship_type']` so the UI can show which suggestions would be ignored
+
+To unlock a field and let agents manage it again, send `_clearOverrides: ['relationship_type']` in a PATCH request.
+
+---
+
+## WhatsApp Integration
+
+The WhatsApp messages live in `public.messages` (populated by an external WhatsApp bridge — not included in this repo). The agents expect rows with:
+
+```sql
+chat_id   TEXT    -- e.g. "919876543210@c.us" or "120363...@g.us"
+event     TEXT    -- 'message' | 'message_create' | 'message_historical' | 'group_update'
+msg_type  TEXT    -- 'chat' | 'image' | 'video' | 'document' | 'ptt' | ...
+data      JSONB   -- full WhatsApp message payload
+ts        TIMESTAMPTZ
 ```
 
-## Migration from v1.0
-
-The old system has been safely backed up to `old-system-backup/` and can be restored if needed. The new agent system provides superior functionality with 98% less code.
-
-### What Changed
-- **Removed**: Complex intent extraction, workflow orchestration, multiple handler layers
-- **Added**: Claude agent with MCP tools, multi-turn conversations, intelligent database management
-- **Improved**: Reliability, maintainability, extensibility
-
-## Agent Capabilities
-
-The agent can handle complex requests like:
-- "Create a database of home theater systems and research Sony, Yamaha, and Denon options"
-- "Analyze NVDA stock and save the results"  
-- "Add wine recommendations to my collection database"
-
-It automatically:
-1. Searches for existing databases to prevent duplicates
-2. Creates databases with appropriate schemas if needed
-3. Populates databases with researched data
-4. Saves analyses and creates tasks as requested
-5. Handles multi-step workflows through natural conversation
-
-## Production Deployment
-
-The system runs continuously with:
-- **Lifelog fetching**: Every 5 minutes
-- **Lifelog processing**: Every 30 seconds  
-- **Graceful shutdown**: Proper database cleanup on exit
-- **Error handling**: Robust error recovery and logging
+---
 
 ## License
 

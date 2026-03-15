@@ -1,0 +1,35 @@
+.header {
+  height: 56px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.left { flex: 1; }
+.wordmark {
+  font-family: 'Fraunces', serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-decoration: none;
+  line-height: 1;
+}
+.nav { display: flex; gap: 0.25rem; }
+.link {
+  font-size: 0.825rem;
+  font-weight: 500;
+  color: var(--text-3);
+  text-decoration: none;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  transition: background 0.12s, color 0.12s;
+}
+.link:hover { background: var(--bg-2); color: var(--text); }
+.active { background: var(--accent-subtle); color: var(--accent); }

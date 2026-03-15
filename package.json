@@ -4,12 +4,22 @@
     "private": true,
     "workspaces": [
         "packages/db",
-        "packages/agents/*"
+        "packages/agents/*",
+        "packages/ui"
     ],
     "scripts": {
+        "ui": "concurrently \"node packages/ui/server.js\" \"npm start --workspace=packages/ui\"",
+        "ui:dev": "concurrently \"node packages/ui/server.js\" \"npm run dev --workspace=packages/ui\"",
         "limitless": "npm start --workspace=packages/agents/limitless",
         "limitless:fetch": "npm run fetch --workspace=packages/agents/limitless",
         "limitless:archive": "npm run archive --workspace=packages/agents/limitless",
-        "init-db": "npm run init-db --workspace=packages/agents/limitless"
+        "email": "npm start --workspace=packages/agents/email",
+        "email:fetch": "npm run fetch --workspace=packages/agents/email",
+        "relationships": "npm start --workspace=packages/agents/relationships",
+        "projects": "npm start --workspace=packages/agents/projects",
+        "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email"
+    },
+    "devDependencies": {
+        "concurrently": "^9.2.1"
     }
 }

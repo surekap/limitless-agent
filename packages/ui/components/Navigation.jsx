@@ -1,0 +1,35 @@
+'use client'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import styles from './Navigation.module.css'
+
+const NAV_LINKS = [
+  { href: '/',               label: 'Dashboard' },
+  { href: '/relationships',  label: 'Relationships' },
+  { href: '/groups',         label: 'Groups' },
+  { href: '/projects',       label: 'Projects' },
+  { href: '/agents',         label: 'Agents' },
+  { href: '/search',         label: 'Search' },
+]
+
+export default function Navigation() {
+  const pathname = usePathname()
+  return (
+    <header className={styles.header}>
+      <div className={styles.left}>
+        <Link href="/" className={styles.wordmark}>secondbrain</Link>
+      </div>
+      <nav className={styles.nav}>
+        {NAV_LINKS.map(l => (
+          <Link
+            key={l.href}
+            href={l.href}
+            className={`${styles.link} ${pathname === l.href ? styles.active : ''}`}
+          >
+            {l.label}
+          </Link>
+        ))}
+      </nav>
+    </header>
+  )
+}
