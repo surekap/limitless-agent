@@ -77,6 +77,15 @@ function AgentStats({ id, stats }) {
       </div>
     )
   }
+  if (id === 'research') {
+    return (
+      <div className="agent-stats">
+        <div className="stat"><span className="stat-val">{formatNum(stats?.enriched_contacts)}</span><span className="stat-label">Enriched</span></div>
+        <div className="stat"><span className="stat-val">{formatNum(stats?.researched_today)}</span><span className="stat-label">Today</span></div>
+        <div className="stat"><span className="stat-val dim">{relativeTime(stats?.last_research_at)}</span><span className="stat-label">Last run</span></div>
+      </div>
+    )
+  }
   return null
 }
 

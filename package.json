@@ -17,7 +17,8 @@
         "email:fetch": "npm run fetch --workspace=packages/agents/email",
         "relationships": "npm start --workspace=packages/agents/relationships",
         "projects": "npm start --workspace=packages/agents/projects",
-        "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email"
+        "research": "npm start --workspace=packages/agents/research",
+        "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research"
     },
     "devDependencies": {
         "concurrently": "^9.2.1"

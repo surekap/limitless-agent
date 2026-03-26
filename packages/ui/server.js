@@ -58,6 +58,12 @@ const AGENTS = {
     description: 'Groups communications into projects and tracks their progress',
     entrypoint:  path.resolve(__dirname, '../agents/projects/index.js'),
   },
+  research: {
+    id:          'research',
+    name:        'Research Agent',
+    description: 'Enriches contact profiles via Tavily, OpenAI, PeopleDataLabs, SerpAPI',
+    entrypoint:  path.resolve(__dirname, '../agents/research/index.js'),
+  },
 };
 
 // ── Process registry ──────────────────────────────────────────────────────────
@@ -379,6 +385,20 @@ async function relationshipsStats() {
   } catch { return null; }
 }
 
+async function researchStats() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(DISTINCT contact_id) AS enriched_contacts,
+        MAX(researched_at) AS last_research_at,
+        COUNT(*) FILTER (WHERE researched_at > NOW() - INTERVAL '24 hours') AS researched_today
+      FROM relationships.contact_research
+    `);
+    return rows[0];
+  } catch { return null; }
+}
+
 // ── Config helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -406,8 +426,9 @@ app.use(express.json());
 
 // GET /api/agents
 app.get('/api/agents', async (req, res) => {
-  const [eStats, lStats, rStats, pStats] = await Promise.all([
+  const [eStats, lStats, rStats, pStats, rsStats] = await Promise.all([
     emailStats(), limitlessStats(), relationshipsStats(), projectsStats(),
+    researchStats(),
   ]);
   const result = {};
 
@@ -427,6 +448,7 @@ app.get('/api/agents', async (req, res) => {
                  : id === 'limitless'     ? lStats
                  : id === 'relationships' ? rStats
                  : id === 'projects'      ? pStats
+                 : id === 'research'      ? rsStats
                  : null,
     };
   }
@@ -842,6 +864,80 @@ Return ONLY valid JSON:
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// POST /api/relationships/contacts/:id/research — trigger on-demand research
+app.post('/api/relationships/contacts/:id/research', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const { rows } = await db.query(
+    `SELECT id FROM relationships.contacts WHERE id = $1`,
+    [id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+  const researchPath = path.resolve(__dirname, '../agents/research/index.js');
+  const child = spawn(process.execPath, [researchPath], {
+    env: { ...process.env, RESEARCH_CONTACT_ID: String(id) },
+    detached: false,
+    stdio: 'ignore',
+  });
+  child.unref();
+
+  res.json({ status: 'queued', contact_id: id });
+});
+
+// GET /api/relationships/contacts/:id/research — fetch research results
+app.get('/api/relationships/contacts/:id/research', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const { rows: contactRows } = await db.query(
+      `SELECT research_summary FROM relationships.contacts WHERE id = $1`,
+      [id]
+    );
+    const { rows: research } = await db.query(`
+      SELECT source, query, summary, result_json, researched_name, researched_at
+      FROM relationships.contact_research
+      WHERE contact_id = $1
+      ORDER BY researched_at DESC
+    `, [id]);
+
+    res.json({
+      research_summary: contactRows[0]?.research_summary || null,
+      providers: research,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/relationships/contacts/:id/opportunities — per-contact opportunities
+app.get('/api/relationships/contacts/:id/opportunities', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const { rows } = await db.query(`
+      SELECT i.id, i.insight_type, i.title, i.description,
+             i.priority, i.contact_ids, i.is_actioned, i.is_dismissed, i.created_at
+      FROM relationships.insights i
+      WHERE NOT i.is_actioned AND NOT i.is_dismissed
+        AND (
+          i.contact_id = $1
+          OR i.contact_ids @> ARRAY[$1]::bigint[]
+        )
+        AND i.insight_type IN ('opportunity', 'cross_source_opportunity', 'project_match')
+      ORDER BY
+        CASE i.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        i.created_at DESC
+      LIMIT 50
+    `, [id]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Groups API ────────────────────────────────────────────────────────────────
