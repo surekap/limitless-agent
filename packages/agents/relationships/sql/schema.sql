@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS relationships.contact_research (
 CREATE INDEX IF NOT EXISTS contact_research_contact_idx ON relationships.contact_research (contact_id);
 CREATE INDEX IF NOT EXISTS contact_research_name_idx    ON relationships.contact_research (researched_name);
 CREATE INDEX IF NOT EXISTS contact_research_at_idx      ON relationships.contact_research (researched_at DESC);
+CREATE INDEX IF NOT EXISTS contact_research_source_idx ON relationships.contact_research (source);
 
 -- ── Extended insight_type ────────────────────────────────────────────────────
 ALTER TABLE relationships.insights DROP CONSTRAINT IF EXISTS insights_insight_type_check;
@@ -229,5 +230,3 @@ CREATE INDEX IF NOT EXISTS groups_noise_idx   ON relationships.groups (is_noise)
 ALTER TABLE relationships.insights ADD COLUMN IF NOT EXISTS source_ref TEXT;
 CREATE INDEX IF NOT EXISTS insights_source_ref_idx ON relationships.insights (source_ref)
   WHERE source_ref IS NOT NULL;
-
-ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS manual_overrides JSONB DEFAULT '{}';
