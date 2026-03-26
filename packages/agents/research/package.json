@@ -1,0 +1,21 @@
+{
+  "name": "@secondbrain/research",
+  "version": "1.0.0",
+  "main": "index.js",
+  "private": true,
+  "description": "Contact research agent — enriches contacts via Tavily, OpenAI, PDL, SerpAPI",
+  "scripts": {
+    "start": "node index.js",
+    "init-db": "psql $DATABASE_URL < sql/schema.sql"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@secondbrain/db": "*",
+    "@tavily/core": "^0.7.0",
+    "dotenv": "^16.5.0",
+    "node-cron": "^4.1.0",
+    "openai": "^4.0.0",
+    "peopledatalabs": "^3.1.0",
+    "serpapi": "^2.1.0"
+  }
+}

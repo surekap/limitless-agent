@@ -58,6 +58,12 @@ const AGENTS = {
     description: 'Groups communications into projects and tracks their progress',
     entrypoint:  path.resolve(__dirname, '../agents/projects/index.js'),
   },
+  research: {
+    id:          'research',
+    name:        'Research Agent',
+    description: 'Enriches contact profiles via Tavily, OpenAI, PeopleDataLabs, SerpAPI',
+    entrypoint:  path.resolve(__dirname, '../agents/research/index.js'),
+  },
 };
 
 // ── Process registry ──────────────────────────────────────────────────────────
@@ -379,6 +385,20 @@ async function relationshipsStats() {
   } catch { return null; }
 }
 
+async function researchStats() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(DISTINCT contact_id) AS enriched_contacts,
+        MAX(researched_at) AS last_research_at,
+        COUNT(*) FILTER (WHERE researched_at > NOW() - INTERVAL '24 hours') AS researched_today
+      FROM relationships.contact_research
+    `);
+    return rows[0];
+  } catch { return null; }
+}
+
 // ── Config helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -406,8 +426,9 @@ app.use(express.json());
 
 // GET /api/agents
 app.get('/api/agents', async (req, res) => {
-  const [eStats, lStats, rStats, pStats] = await Promise.all([
+  const [eStats, lStats, rStats, pStats, rsStats] = await Promise.all([
     emailStats(), limitlessStats(), relationshipsStats(), projectsStats(),
+    researchStats(),
   ]);
   const result = {};
 
@@ -427,6 +448,7 @@ app.get('/api/agents', async (req, res) => {
                  : id === 'limitless'     ? lStats
                  : id === 'relationships' ? rStats
                  : id === 'projects'      ? pStats
+                 : id === 'research'      ? rsStats
                  : null,
     };
   }
@@ -596,7 +618,16 @@ app.get('/api/relationships/insights', async (req, res) => {
 
     if (!actioned)  { conditions.push('NOT is_actioned'); }
     if (!dismissed) { conditions.push('NOT is_dismissed'); }
-    if (type)     { params.push(type);     conditions.push(`insight_type = $${params.length}`); }
+    if (type) {
+      const types = type.split(',').map(t => t.trim()).filter(Boolean)
+      if (types.length === 1) {
+        params.push(types[0])
+        conditions.push(`insight_type = $${params.length}`)
+      } else {
+        params.push(types)
+        conditions.push(`insight_type = ANY($${params.length})`)
+      }
+    }
     if (priority) { params.push(priority); conditions.push(`priority = $${params.length}`); }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
@@ -781,7 +812,13 @@ app.post('/api/relationships/contacts/:id/reanalyze', async (req, res) => {
       ? `\nUser-confirmed facts (treat as ground truth, do not contradict):\n${overrideKeys.map(k => `- ${k}: ${JSON.stringify(overrides[k].value)}`).join('\n')}\n`
       : '';
 
-    const prompt = `Analyze this contact and return an updated JSON profile.
+    const prompt = `You are analyzing a contact from the perspective of the account owner.
+Describe who THIS CONTACT IS to the account owner — their role, not the reverse.
+
+Examples of correct perspective:
+- Account owner's dentist → relationship_type: "service_provider", my_role: "patient"
+- Account owner's investor → relationship_type: "professional_contact", my_role: "founder"
+- Account owner's employee → relationship_type: "colleague", my_role: "manager"
 
 Contact: ${displayName}${phone ? ` (+${phone})` : ''}
 Existing company: ${contact.company || 'unknown'}
@@ -794,9 +831,10 @@ Return ONLY valid JSON:
 {
   "company": null or "company name",
   "job_title": null or "their role",
+  "my_role": null or "account owner's role relative to this contact (e.g. patient, client, mentee)",
   "relationship_type": "family|friend|colleague|client|vendor|service_provider|professional_contact|unknown",
   "relationship_strength": "strong|moderate|weak|noise",
-  "summary": "2-3 sentence description of who this person is and your relationship",
+  "summary": "2-3 sentence description of who this person is TO the account owner",
   "tags": ["tag1", "tag2"],
   "is_noise": false
 }`;
@@ -812,9 +850,18 @@ Return ONLY valid JSON:
     const clean = raw.replace(/^```(?:json)?\n?/m,'').replace(/\n?```$/m,'').trim();
     const result = JSON.parse(clean);
 
+    // Persist my_role if returned
+    if (result.my_role !== undefined) {
+      await db.query(
+        `UPDATE relationships.contacts SET my_role = $1, updated_at = NOW() WHERE id = $2`,
+        [result.my_role || null, id]
+      )
+    }
+
     res.json({
       company:               result.company               ?? null,
       job_title:             result.job_title             ?? null,
+      my_role:               result.my_role               ?? null,
       relationship_type:     result.relationship_type     || 'unknown',
       relationship_strength: result.relationship_strength || 'weak',
       summary:               result.summary               || '',
@@ -826,6 +873,80 @@ Return ONLY valid JSON:
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// POST /api/relationships/contacts/:id/research — trigger on-demand research
+app.post('/api/relationships/contacts/:id/research', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const { rows } = await db.query(
+    `SELECT id FROM relationships.contacts WHERE id = $1`,
+    [id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Not found' });
+
+  const researchPath = path.resolve(__dirname, '../agents/research/index.js');
+  const child = spawn(process.execPath, [researchPath], {
+    env: { ...process.env, RESEARCH_CONTACT_ID: String(id) },
+    detached: false,
+    stdio: 'ignore',
+  });
+  child.unref();
+
+  res.json({ status: 'queued', contact_id: id });
+});
+
+// GET /api/relationships/contacts/:id/research — fetch research results
+app.get('/api/relationships/contacts/:id/research', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const { rows: contactRows } = await db.query(
+      `SELECT research_summary FROM relationships.contacts WHERE id = $1`,
+      [id]
+    );
+    const { rows: research } = await db.query(`
+      SELECT source, query, summary, result_json, researched_name, researched_at
+      FROM relationships.contact_research
+      WHERE contact_id = $1
+      ORDER BY researched_at DESC
+    `, [id]);
+
+    res.json({
+      research_summary: contactRows[0]?.research_summary || null,
+      providers: research,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/relationships/contacts/:id/opportunities — per-contact opportunities
+app.get('/api/relationships/contacts/:id/opportunities', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const { rows } = await db.query(`
+      SELECT i.id, i.insight_type, i.title, i.description,
+             i.priority, i.contact_ids, i.is_actioned, i.is_dismissed, i.created_at
+      FROM relationships.insights i
+      WHERE NOT i.is_actioned AND NOT i.is_dismissed
+        AND (
+          i.contact_id = $1
+          OR i.contact_ids @> ARRAY[$1]::bigint[]
+        )
+        AND i.insight_type IN ('opportunity', 'cross_source_opportunity', 'project_match')
+      ORDER BY
+        CASE i.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        i.created_at DESC
+      LIMIT 50
+    `, [id]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Groups API ────────────────────────────────────────────────────────────────
