@@ -49,7 +49,16 @@ function sourceIcon(source) {
 }
 
 function insightIcon(type) {
-  return { awaiting_reply: '💬', unread_group: '👥', cold_email: '📧', opportunity: '✨', action_needed: '⚡', topic: '💡' }[type] || '📌'
+  return {
+    awaiting_reply: '💬',
+    unread_group: '👥',
+    cold_email: '📧',
+    opportunity: '✨',
+    action_needed: '⚡',
+    topic: '💡',
+    cross_source_opportunity: '🔗',
+    project_match: '🎯',
+  }[type] || '📌'
 }
 
 function priorityIcon(p) {
@@ -153,6 +162,11 @@ export default function RelationshipsPage() {
   const [toast, setToast] = useState({ msg: '', visible: false })
   const toastTimer = useRef(null)
   const [lightboxSrc, setLightboxSrc] = useState(null)
+  const [detailTab, setDetailTab] = useState('communications') // 'communications' | 'research' | 'opportunities'
+  const [sourceFilter, setSourceFilter] = useState('')  // '' | 'whatsapp' | 'email' | 'limitless'
+  const [contactResearch, setContactResearch] = useState(null)
+  const [contactOpportunities, setContactOpportunities] = useState([])
+  const [researchRefreshing, setResearchRefreshing] = useState(false)
 
   // Edit modal state
   const [editOpen, setEditOpen] = useState(false)
@@ -222,10 +236,45 @@ export default function RelationshipsPage() {
   async function selectContact(id) {
     setSelectedContactId(id)
     setSelectedContact(null)
+    setDetailTab('communications')
+    setSourceFilter('')
+    setContactResearch(null)
+    setContactOpportunities([])
     try {
       const c = await apiFetch('GET', `/api/relationships/contacts/${id}`)
       setSelectedContact(c)
     } catch { showToast('Failed to load contact') }
+  }
+
+  async function loadContactResearch(id) {
+    try {
+      const data = await apiFetch('GET', `/api/relationships/contacts/${id}/research`)
+      setContactResearch(data)
+    } catch { /* ignore */ }
+  }
+
+  async function loadContactOpportunities(id) {
+    try {
+      const data = await apiFetch('GET', `/api/relationships/contacts/${id}/opportunities`)
+      setContactOpportunities(Array.isArray(data) ? data : [])
+    } catch { /* ignore */ }
+  }
+
+  async function handleDetailTabChange(tab) {
+    setDetailTab(tab)
+    if (!selectedContactId) return
+    if (tab === 'research' && !contactResearch) loadContactResearch(selectedContactId)
+    if (tab === 'opportunities') loadContactOpportunities(selectedContactId)
+  }
+
+  async function triggerResearchRefresh() {
+    if (!selectedContactId) return
+    setResearchRefreshing(true)
+    try {
+      await apiFetch('POST', `/api/relationships/contacts/${selectedContactId}/research`)
+      showToast('Research queued — refresh in a minute')
+    } catch { showToast('Failed to queue research') }
+    setResearchRefreshing(false)
   }
 
   function openEditModal() {
@@ -481,6 +530,29 @@ export default function RelationshipsPage() {
         .lightbox.open { opacity:1;pointer-events:auto; }
         .lightbox img { max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 20px 60px oklch(5% 0 0/.5); }
         .header-right { display:flex;align-items:center;gap:.75rem; }
+        .detail-tab-bar { display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0;padding:0 1.5rem; }
+        .detail-tab { font-family:'Plus Jakarta Sans',sans-serif;font-size:.78rem;font-weight:500;color:var(--text-3);padding:.6rem .875rem;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;transition:color .15s,border-color .15s;background:none;border-top:none;border-left:none;border-right:none; }
+        .detail-tab:hover { color:var(--text-2); }
+        .detail-tab.active { color:var(--accent);border-bottom-color:var(--accent); }
+        .source-filter-row { display:flex;gap:.375rem;padding:.75rem 1.5rem .25rem;flex-shrink:0; }
+        .source-chip { font-size:.7rem;font-weight:500;padding:.2rem .6rem;border-radius:100px;border:1px solid var(--border);background:var(--surface);color:var(--text-3);cursor:pointer;transition:all .12s; }
+        .source-chip:hover { border-color:var(--border-strong);color:var(--text-2); }
+        .source-chip.active { background:var(--accent-subtle);border-color:var(--accent-border);color:var(--accent); }
+        .my-role-label { font-size:.75rem;color:var(--text-3);margin-top:.15rem; }
+        .my-role-label span { color:var(--text-2);font-weight:500; }
+        .research-area { flex:1;overflow-y:auto;padding:1.25rem 1.5rem; }
+        .research-area::-webkit-scrollbar { width:4px; }
+        .research-dossier { font-size:.8125rem;color:var(--text-2);line-height:1.7;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:1.25rem; }
+        .research-dossier-label { font-size:.68rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:.5rem; }
+        .research-provider { margin-bottom:.875rem; }
+        .research-provider-header { font-size:.75rem;font-weight:600;color:var(--text-2);margin-bottom:.35rem;display:flex;align-items:center;gap:.4rem; }
+        .research-provider-summary { font-size:.775rem;color:var(--text-3);line-height:1.55;white-space:pre-wrap;word-break:break-word; }
+        .research-meta { font-size:.68rem;color:var(--text-3);margin-top:.25rem; }
+        .research-empty { text-align:center;padding:2.5rem 1rem;color:var(--text-3); }
+        .research-empty-icon { font-size:2rem;margin-bottom:.5rem;opacity:.4; }
+        .opps-area { flex:1;overflow-y:auto;padding:.75rem 1rem; }
+        .opps-area::-webkit-scrollbar { width:4px; }
+        .opps-empty { text-align:center;padding:2rem 1rem;color:var(--text-3);font-size:.8rem; }
       `}</style>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0.5rem 1.5rem', borderBottom: '1px solid var(--border)', background: 'var(--surface)', flexShrink: 0 }}>
@@ -565,6 +637,9 @@ export default function RelationshipsPage() {
                         {[selectedContact.job_title, selectedContact.company].filter(Boolean).join(' @ ')}
                       </div>
                     )}
+                    {selectedContact.my_role && (
+                      <div className="my-role-label">Your role: <span>{selectedContact.my_role}</span></div>
+                    )}
                   </div>
                   <div className="profile-header-actions">
                     <button className="btn btn-ghost btn-sm" onClick={openEditModal}>Edit</button>
@@ -581,33 +656,144 @@ export default function RelationshipsPage() {
                 </div>
                 {selectedContact.summary && <p className="profile-summary">{selectedContact.summary}</p>}
               </div>
-              <div className="comms-area">
-                {!(selectedContact.communications?.length) ? (
-                  <div className="comms-empty">No communications recorded yet</div>
-                ) : (
-                  Object.entries(groupByDate(selectedContact.communications)).map(([date, items]) => (
-                    <div className="comms-date-group" key={date}>
-                      <div className="comms-date-label">{date}</div>
-                      {items.map((c, i) => {
-                        const dir = c.direction || 'inbound'
-                        const dirLabel = dir === 'outbound' ? '↗ Sent' : dir === 'group' ? '👥 Group' : '↙ Received'
-                        return (
-                          <div className="comm-item" key={i}>
-                            <div className="comm-icon">{sourceIcon(c.source)}</div>
-                            <div className="comm-body">
-                              <div className="comm-meta">
-                                <span className={`comm-direction ${dir}`}>{dirLabel}</span>
-                                <span className="comm-time">{fmtTime(c.occurred_at)}</span>
-                              </div>
-                              <CommContent comm={c} />
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ))
-                )}
+
+              {/* Tab bar */}
+              <div className="detail-tab-bar">
+                {['communications', 'research', 'opportunities'].map(tab => (
+                  <button key={tab}
+                    className={`detail-tab${detailTab === tab ? ' active' : ''}`}
+                    onClick={() => handleDetailTabChange(tab)}>
+                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </button>
+                ))}
               </div>
+
+              {/* Communications tab */}
+              {detailTab === 'communications' && (
+                <>
+                  <div className="source-filter-row">
+                    {[['', 'All'], ['whatsapp', '💬 WhatsApp'], ['email', '📧 Email'], ['limitless', '🎙️ Limitless']].map(([val, label]) => (
+                      <button key={val}
+                        className={`source-chip${sourceFilter === val ? ' active' : ''}`}
+                        onClick={() => setSourceFilter(val)}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="comms-area">
+                    {(() => {
+                      const filtered = (selectedContact.communications || [])
+                        .filter(c => !sourceFilter || c.source === sourceFilter)
+                      if (!filtered.length) return <div className="comms-empty">No communications recorded yet</div>
+                      return Object.entries(groupByDate(filtered)).map(([date, items]) => (
+                        <div className="comms-date-group" key={date}>
+                          <div className="comms-date-label">{date}</div>
+                          {items.map((c, i) => {
+                            const dir = c.direction || 'inbound'
+                            const dirLabel = dir === 'outbound' ? '↗ Sent' : dir === 'group' ? '👥 Group' : '↙ Received'
+                            return (
+                              <div className="comm-item" key={i}>
+                                <div className="comm-icon">{sourceIcon(c.source)}</div>
+                                <div className="comm-body">
+                                  <div className="comm-meta">
+                                    <span className={`comm-direction ${dir}`}>{dirLabel}</span>
+                                    <span className="comm-time">{fmtTime(c.occurred_at)}</span>
+                                  </div>
+                                  <CommContent comm={c} />
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ))
+                    })()}
+                  </div>
+                </>
+              )}
+
+              {/* Research tab */}
+              {detailTab === 'research' && (
+                <div className="research-area">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                    <span style={{ fontSize: '.75rem', color: 'var(--text-3)' }}>
+                      {contactResearch?.providers?.[0]?.researched_at
+                        ? `Last researched ${relTime(contactResearch.providers[0].researched_at)}`
+                        : 'Not yet researched'}
+                    </span>
+                    <button className="btn btn-ghost btn-sm"
+                      onClick={triggerResearchRefresh}
+                      disabled={researchRefreshing}>
+                      {researchRefreshing ? 'Queuing…' : 'Refresh'}
+                    </button>
+                  </div>
+
+                  {!contactResearch ? (
+                    <div className="research-empty">
+                      <div className="research-empty-icon">🔍</div>
+                      Loading…
+                    </div>
+                  ) : !contactResearch.research_summary && (!contactResearch.providers || contactResearch.providers.length === 0) ? (
+                    <div className="research-empty">
+                      <div className="research-empty-icon">🔍</div>
+                      <div>No research yet</div>
+                      <button className="btn btn-primary btn-sm" style={{ marginTop: '.75rem' }}
+                        onClick={triggerResearchRefresh}>
+                        Research this contact
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {contactResearch.research_summary && (
+                        <div className="research-dossier">
+                          <div className="research-dossier-label">Dossier</div>
+                          {contactResearch.research_summary}
+                        </div>
+                      )}
+                      {(contactResearch.providers || []).map(p => (
+                        <div className="research-provider" key={p.source}>
+                          <div className="research-provider-header">
+                            <span>{{ tavily: '🌐', openai: '🤖', peopledatalabs: '👤', serpapi: '🔎' }[p.source] || '📌'}</span>
+                            <span>{p.source}</span>
+                          </div>
+                          <div className="research-provider-summary">{p.summary}</div>
+                          <div className="research-meta">
+                            Queried: {p.query} · {p.researched_at ? fmtDate(p.researched_at) : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Opportunities tab */}
+              {detailTab === 'opportunities' && (
+                <div className="opps-area">
+                  {contactOpportunities.length === 0 ? (
+                    <div className="opps-empty">
+                      <div style={{ fontSize: '2rem', opacity: .4, marginBottom: '.5rem' }}>✨</div>
+                      No opportunities yet
+                    </div>
+                  ) : (
+                    contactOpportunities.map(ins => (
+                      <div className="insight-card" key={ins.id}>
+                        <div className="insight-card-header">
+                          <div className="insight-type-icon">{insightIcon(ins.insight_type)}</div>
+                          <div className="insight-card-meta">
+                            <div className="insight-title">{ins.title}</div>
+                          </div>
+                          <span className="priority-badge" title={`${ins.priority} priority`}>{priorityIcon(ins.priority)}</span>
+                        </div>
+                        {ins.description && <div className="insight-description">{ins.description}</div>}
+                        <div className="insight-actions">
+                          <button className="insight-btn action" onClick={() => actionInsight(ins.id)}>Done</button>
+                          <button className="insight-btn dismiss" onClick={() => dismissInsight(ins.id)}>Dismiss</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           )}
         </main>
@@ -636,6 +822,7 @@ export default function RelationshipsPage() {
                 { filter: 'awaiting_reply', label: 'Awaiting Reply' },
                 { filter: 'unread_group', label: 'Active Groups' },
                 { filter: 'cold_email', label: 'Cold Emails' },
+                { filter: 'cross_source_opportunity', label: 'Opportunities' },
               ].map(({ filter, label }) => (
                 <button key={filter} className={`insight-tab${insightFilter === filter ? ' active' : ''}`}
                   onClick={() => setInsightFilter(filter)}>
