@@ -618,7 +618,16 @@ app.get('/api/relationships/insights', async (req, res) => {
 
     if (!actioned)  { conditions.push('NOT is_actioned'); }
     if (!dismissed) { conditions.push('NOT is_dismissed'); }
-    if (type)     { params.push(type);     conditions.push(`insight_type = $${params.length}`); }
+    if (type) {
+      const types = type.split(',').map(t => t.trim()).filter(Boolean)
+      if (types.length === 1) {
+        params.push(types[0])
+        conditions.push(`insight_type = $${params.length}`)
+      } else {
+        params.push(types)
+        conditions.push(`insight_type = ANY($${params.length})`)
+      }
+    }
     if (priority) { params.push(priority); conditions.push(`priority = $${params.length}`); }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';

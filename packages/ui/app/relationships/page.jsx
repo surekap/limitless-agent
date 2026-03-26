@@ -822,7 +822,7 @@ export default function RelationshipsPage() {
                 { filter: 'awaiting_reply', label: 'Awaiting Reply' },
                 { filter: 'unread_group', label: 'Active Groups' },
                 { filter: 'cold_email', label: 'Cold Emails' },
-                { filter: 'cross_source_opportunity', label: 'Opportunities' },
+                { filter: 'opportunity,cross_source_opportunity,project_match', label: 'Opportunities' },
               ].map(({ filter, label }) => (
                 <button key={filter} className={`insight-tab${insightFilter === filter ? ' active' : ''}`}
                   onClick={() => setInsightFilter(filter)}>

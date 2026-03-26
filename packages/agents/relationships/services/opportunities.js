@@ -446,7 +446,8 @@ Rules:
       }
 
       // Deduplicate: skip if a similar insight already exists unactioned
-      const titleHash = `cross:${item.title?.slice(0, 40)?.toLowerCase().replace(/\s+/g, '_')}`
+      const sortedIds = [...contactIds].sort((a, b) => a - b).join(',')
+      const titleHash = `cross:${item.title?.slice(0, 40)?.toLowerCase().replace(/\s+/g, '_')}:${sortedIds}`
       const { rows: exists } = await db.query(`
         SELECT id FROM relationships.insights
         WHERE source_ref = $1
@@ -650,10 +651,10 @@ Return ONLY a JSON object (or null if no strong opportunity):
 }
 
 // ── Swarm orchestrator ────────────────────────────────────────────────────────
-// Runs all 4 agents in parallel. Returns flat array of all insights found.
+// Runs all 7 agents. Agents 1-4 in parallel, Agents 5-7 sequential. Returns flat array of all insights found.
 
 async function runOpportunitySwarm(lastRunAt) {
-  console.log('\n🔭 Running opportunity detection swarm (4 agents in parallel)...')
+  console.log('\n🔭 Running opportunity detection swarm (7 agents)...')
 
   const [
     meetingResult,
