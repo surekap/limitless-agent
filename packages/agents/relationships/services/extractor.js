@@ -244,6 +244,113 @@ async function getEmailsBySender(fromAddress, limit = 20) {
   }
 }
 
+/**
+ * Build a timestamped cross-source digest of recent communications.
+ * Used by the cross-source opportunity swarm agents.
+ *
+ * @param {Date|null} since - only include messages after this date (default: 30 days ago)
+ * @returns {string} formatted digest, truncated to ~8000 tokens (~32000 chars)
+ */
+async function buildCrossSourceDigest(since) {
+  const cutoff = since || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+  const lines = []
+
+  try {
+    // WhatsApp DMs
+    const { rows: waDMs } = await db.query(`
+      SELECT
+        m.ts,
+        COALESCE(cm.name, m.data->'_data'->>'notifyName', m.chat_id) AS contact_name,
+        (m.data->'id'->>'fromMe')::boolean AS from_me,
+        m.data->>'body' AS body
+      FROM public.messages m
+      LEFT JOIN public.chat_metadata cm ON cm.chat_id = m.chat_id
+      WHERE m.chat_id LIKE '%@c.us'
+        AND m.chat_id != $1
+        AND m.event IN ('message','message_create','message_historical')
+        AND m.ts > $2
+        AND m.data->>'body' IS NOT NULL
+        AND length(m.data->>'body') > 5
+        AND m.data->>'body' NOT LIKE '/9j/%'
+      ORDER BY m.ts DESC
+      LIMIT 200
+    `, [MY_WA_JID, cutoff])
+
+    for (const r of waDMs) {
+      const who = r.from_me ? 'Me → ' + r.contact_name : r.contact_name + ' → Me'
+      const date = r.ts ? new Date(r.ts).toLocaleDateString('en-GB') : ''
+      lines.push({ ts: r.ts, text: `[WhatsApp DM/${r.contact_name}, ${date}] ${who}: ${(r.body || '').slice(0, 200)}` })
+    }
+
+    // WhatsApp groups
+    const { rows: waGroups } = await db.query(`
+      SELECT
+        m.ts,
+        COALESCE(cm.name, m.chat_id) AS group_name,
+        m.data->'_data'->>'notifyName' AS sender_name,
+        (m.data->'id'->>'fromMe')::boolean AS from_me,
+        m.data->>'body' AS body
+      FROM public.messages m
+      LEFT JOIN public.chat_metadata cm ON cm.chat_id = m.chat_id
+      WHERE m.chat_id LIKE '%@g.us'
+        AND m.event IN ('message','message_create','message_historical')
+        AND m.ts > $1
+        AND m.data->>'body' IS NOT NULL
+        AND length(m.data->>'body') > 5
+        AND m.data->>'body' NOT LIKE '/9j/%'
+      ORDER BY m.ts DESC
+      LIMIT 300
+    `, [cutoff])
+
+    for (const r of waGroups) {
+      const sender = r.from_me ? 'Me' : (r.sender_name || 'Unknown')
+      const date = r.ts ? new Date(r.ts).toLocaleDateString('en-GB') : ''
+      lines.push({ ts: r.ts, text: `[Group/${r.group_name}, ${date}] ${sender}: ${(r.body || '').slice(0, 200)}` })
+    }
+
+    // Emails
+    const { rows: emails } = await db.query(`
+      SELECT e.date AS ts, e.from_address, e.subject, e.body_text
+      FROM email.emails e
+      WHERE e.date > $1
+        AND e.body_text IS NOT NULL
+      ORDER BY e.date DESC
+      LIMIT 100
+    `, [cutoff])
+
+    for (const r of emails) {
+      const date = r.ts ? new Date(r.ts).toLocaleDateString('en-GB') : ''
+      const snippet = (r.body_text || '').replace(/\s+/g, ' ').slice(0, 150)
+      lines.push({ ts: r.ts, text: `[Email/${r.from_address}, ${date}] Subject: ${r.subject || '(none)'} — ${snippet}` })
+    }
+
+    // Limitless lifelogs
+    const { rows: lifelogs } = await db.query(`
+      SELECT id, title, start_time AS ts, markdown
+      FROM limitless.lifelogs
+      WHERE start_time > $1
+        AND markdown IS NOT NULL
+        AND length(markdown) > 100
+      ORDER BY start_time DESC
+      LIMIT 20
+    `, [cutoff])
+
+    for (const r of lifelogs) {
+      const date = r.ts ? new Date(r.ts).toLocaleDateString('en-GB') : ''
+      const snippet = (r.markdown || '').slice(0, 400).replace(/\n+/g, ' ')
+      lines.push({ ts: r.ts, text: `[Limitless/${r.title || r.id}, ${date}] ${snippet}` })
+    }
+
+  } catch (err) {
+    console.error('[extractor] buildCrossSourceDigest error:', err.message)
+  }
+
+  // Sort by timestamp descending, build string, truncate to ~32000 chars (~8000 tokens)
+  lines.sort((a, b) => new Date(b.ts) - new Date(a.ts))
+  const digest = lines.map(l => l.text).join('\n')
+  return digest.slice(0, 32000)
+}
+
 module.exports = {
   MY_WA_JID,
   parseEmailAddress,
@@ -255,4 +362,5 @@ module.exports = {
   extractLimitlessConversations,
   getEmailContacts,
   getEmailsBySender,
+  buildCrossSourceDigest,
 }
