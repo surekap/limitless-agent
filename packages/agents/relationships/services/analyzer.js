@@ -34,6 +34,7 @@ async function analyzeDirectChatContact(chatId, contactData, messages, existingO
     display_name: contactData.display_name || chatId.replace('@c.us', ''),
     company: null,
     job_title: null,
+    my_role: null,
     relationship_type: 'unknown',
     relationship_strength: 'weak',
     summary: 'No analysis available.',
@@ -59,7 +60,14 @@ async function analyzeDirectChatContact(chatId, contactData, messages, existingO
       ? `\nUser-confirmed facts (treat as ground truth, do not contradict):\n${overrideKeys.map(k => `- ${k}: ${JSON.stringify(overrides[k].value)}`).join('\n')}\n`
       : ''
 
-    const prompt = `Analyze this WhatsApp contact and return a JSON profile.
+    const prompt = `You are analyzing a WhatsApp contact from the perspective of the account owner.
+Describe who THIS CONTACT IS to the account owner — their role, not the reverse.
+
+Examples of correct perspective:
+- Account owner's dentist → relationship_type: "service_provider", my_role: "patient"
+- Account owner's investor → relationship_type: "professional_contact", my_role: "founder"
+- Account owner's employee → relationship_type: "colleague", my_role: "manager"
+- Account owner's friend → relationship_type: "friend", my_role: "friend"
 
 Contact info:
 - Phone: ${phone}
@@ -73,14 +81,15 @@ ${overrideContext}
 Recent messages (newest first):
 ${sample || '(no text messages)'}
 
-Return ONLY valid JSON with these fields:
+Return ONLY valid JSON:
 {
   "display_name": "best name for this person",
   "company": null or "company name",
   "job_title": null or "their job title",
   "relationship_type": "family|friend|colleague|client|vendor|service_provider|professional_contact|unknown",
+  "my_role": null or "account owner's role relative to this contact (e.g. patient, client, mentee)",
   "relationship_strength": "strong|moderate|weak|noise",
-  "summary": "2-3 sentence description of who this person is and your relationship",
+  "summary": "2-3 sentences: who this person is TO the account owner and what the relationship is",
   "tags": ["tag1", "tag2"],
   "is_noise": false
 }
@@ -101,6 +110,7 @@ relationship_strength=noise means this contact is not meaningful (same as is_noi
       display_name: result.display_name || defaults.display_name,
       company: result.company || null,
       job_title: result.job_title || null,
+      my_role: result.my_role || null,
       relationship_type: result.relationship_type || 'unknown',
       relationship_strength: result.relationship_strength || 'weak',
       summary: result.summary || '',
