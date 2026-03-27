@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS system.llm_providers (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS llm_providers_name_unique ON system.llm_providers (name);
+
 -- Per-agent ordered provider list
 CREATE TABLE IF NOT EXISTS system.agent_llm_priority (
   agent_id    TEXT NOT NULL,
@@ -51,24 +53,43 @@ CREATE TABLE IF NOT EXISTS system.config (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Per-agent config tables
-CREATE TABLE IF NOT EXISTS email.config (
-  key        TEXT PRIMARY KEY,
-  value      JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS limitless.config (
-  key        TEXT PRIMARY KEY,
-  value      JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS projects.config (
-  key        TEXT PRIMARY KEY,
-  value      JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS relationships.config (
-  key        TEXT PRIMARY KEY,
-  value      JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- Per-agent config tables (created only if the agent schema already exists)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'email') THEN
+    CREATE TABLE IF NOT EXISTS email.config (
+      key        TEXT PRIMARY KEY,
+      value      JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'limitless') THEN
+    CREATE TABLE IF NOT EXISTS limitless.config (
+      key        TEXT PRIMARY KEY,
+      value      JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'projects') THEN
+    CREATE TABLE IF NOT EXISTS projects.config (
+      key        TEXT PRIMARY KEY,
+      value      JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'relationships') THEN
+    CREATE TABLE IF NOT EXISTS relationships.config (
+      key        TEXT PRIMARY KEY,
+      value      JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  END IF;
+END $$;
