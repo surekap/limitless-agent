@@ -422,78 +422,99 @@ function AiImporterConfigForm({ agentId, config, onSave }) {
   )
 }
 
-function AgentSection({ agent, config, onStart, onStop, onConfigSave }) {
-  const [cfgOpen, setCfgOpen] = useState(false)
-  const [logOpen, setLogOpen] = useState(false)
+function AgentLlmTab({ agentId, llmList, allProviders, onSave, usageRow }) {
+  const [list, setList] = useState(llmList || [])
+  useEffect(() => setList(llmList || []), [llmList])
 
-  const s = agent.status
-  const uptimeText = s === 'running' && agent.startTime
-    ? `started ${relativeTime(agent.startTime)}`
-    : s === 'stopped' && agent.stoppedAt
-      ? `stopped ${relativeTime(agent.stoppedAt)}`
-      : ''
+  const available = allProviders.filter(p => p.is_enabled && !list.find(l => l.id === p.id))
+  const hasExhausted = list.some(p => !p.has_credits)
+  const allExhausted = list.length > 0 && list.every(p => !p.has_credits)
+
+  function moveUp(idx) {
+    if (idx === 0) return
+    const next = [...list]
+    ;[next[idx - 1], next[idx]] = [next[idx], next[idx - 1]]
+    setList(next.map((p, i) => ({ ...p, priority: i + 1 })))
+  }
+
+  function removeItem(idx) {
+    setList(list.filter((_, i) => i !== idx).map((p, i) => ({ ...p, priority: i + 1 })))
+  }
+
+  function addItem(provId) {
+    const prov = allProviders.find(p => p.id === Number(provId))
+    if (!prov) return
+    setList([...list, { ...prov, priority: list.length + 1 }])
+  }
 
   return (
-    <section className="agent-section" data-id={agent.id} data-status={s}>
-      <div className="agent-header">
-        <div className="agent-accent" />
-        <div className="agent-meta">
-          <div className="agent-name">{agent.name}</div>
-          <div className="agent-description">{agent.description}</div>
+    <div>
+      {allExhausted && (
+        <div style={{ padding: '0.4rem 0.75rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '5px', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#ef4444' }}>
+          ⚠ No working providers — this agent will fail to run
         </div>
-        <div className="agent-controls">
-          {uptimeText && <span style={{ fontSize: '.75rem', color: 'var(--text-3)' }}>{uptimeText}</span>}
-          <StatusPill status={s} />
-          {s === 'running'
-            ? <button className="btn btn-stop" onClick={() => onStop(agent.id)}>&#9632; Stop</button>
-            : <button className="btn btn-primary" onClick={() => onStart(agent.id)}>&#9654; Start</button>}
+      )}
+      {hasExhausted && !allExhausted && (
+        <div style={{ padding: '0.4rem 0.75rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '5px', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#f59e0b' }}>
+          ⚠ Some providers have exhausted credits — fallback will be used
         </div>
-      </div>
-
-      <AgentStats id={agent.id} stats={agent.stats} />
-
-      <div className="panels">
-        <PanelToggle label="Configuration" expanded={cfgOpen} onToggle={() => setCfgOpen(v => !v)} />
-        <div className={`panel-body${cfgOpen ? ' open' : ''}`}>
-          <div className="panel-inner">
-            <div className="panel-content">
-              {agent.id === 'email' && config.email && (
-                <EmailConfigForm config={config.email} onSave={onConfigSave} />
-              )}
-              {agent.id === 'limitless' && config.limitless && (
-                <LimitlessConfigForm config={config.limitless} onSave={onConfigSave} />
-              )}
-              {agent.id === 'openai' && (
-                <AiImporterConfigForm agentId="openai" config={config} onSave={onConfigSave} />
-              )}
-              {agent.id === 'gemini' && (
-                <AiImporterConfigForm agentId="gemini" config={config} onSave={onConfigSave} />
-              )}
-              {agent.id !== 'email' && agent.id !== 'limitless' && agent.id !== 'openai' && agent.id !== 'gemini' && (
-                <div style={{ color: 'var(--text-3)', fontSize: '.825rem' }}>No configurable options for this agent.</div>
-              )}
+      )}
+      {list.length === 0 ? (
+        <div style={{ color: 'var(--muted, #888)', fontSize: '0.8125rem', marginBottom: '0.5rem' }}>No providers assigned to this agent.</div>
+      ) : (
+        <div style={{ marginBottom: '0.5rem' }}>
+          {list.map((p, idx) => (
+            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0', borderBottom: '1px solid var(--border)', background: !p.has_credits ? 'rgba(245,158,11,0.03)' : 'transparent' }}>
+              <span style={{ color: 'var(--muted, #888)', minWidth: '1.2rem', fontSize: '0.8rem' }}>{idx + 1}.</span>
+              <span style={{ flex: 1, fontSize: '0.8125rem' }}>{p.name}</span>
+              <span style={{ fontSize: '0.7rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.1rem 0.35rem' }}>{p.provider_type}</span>
+              <span style={{ color: 'var(--muted, #888)', fontSize: '0.75rem', minWidth: '8rem' }}>{p.model || '—'}</span>
+              {!p.has_credits && <span style={{ color: '#f59e0b', fontSize: '0.7rem' }}>⚠ credits</span>}
+              <button onClick={() => moveUp(idx)} disabled={idx === 0} title="Move up" style={{ padding: '0 0.3rem', fontSize: '0.85rem', opacity: idx === 0 ? 0.3 : 1, cursor: idx === 0 ? 'default' : 'pointer' }}>↑</button>
+              <button onClick={() => removeItem(idx)} title="Remove" style={{ padding: '0 0.3rem', fontSize: '0.85rem', color: 'var(--muted, #888)', cursor: 'pointer' }}>×</button>
             </div>
-          </div>
+          ))}
         </div>
-
-        <PanelToggle label="Logs" expanded={logOpen} onToggle={() => setLogOpen(v => !v)} />
-        <div className={`panel-body${logOpen ? ' open' : ''}`}>
-          <div className="panel-inner">
-            <div className="panel-content">
-              <LogViewer agentId={agent.id} expanded={logOpen} />
-            </div>
-          </div>
-        </div>
+      )}
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {available.length > 0 && (
+          <select defaultValue="" onChange={e => { if (e.target.value) addItem(e.target.value); e.target.value = '' }}
+            style={{ fontSize: '0.8rem' }}>
+            <option value="">+ Add provider…</option>
+            {available.map(p => <option key={p.id} value={p.id}>{p.name} ({p.provider_type})</option>)}
+          </select>
+        )}
+        <button onClick={() => onSave(agentId, list.map((p, i) => ({ provider_id: p.id, priority: i + 1 })))}
+          style={{ fontSize: '0.8rem', padding: '0.3rem 0.75rem' }}>
+          Save priority
+        </button>
       </div>
-    </section>
+      {usageRow?.cost_usd > 0 && (
+        <div style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--muted, #888)', borderTop: '1px solid var(--border)', paddingTop: '0.5rem' }}>
+          MTD: {Number((usageRow.tokens_in || 0)) + Number((usageRow.tokens_out || 0))} tokens · ${Number(usageRow.cost_usd).toFixed(4)}
+        </div>
+      )}
+    </div>
   )
 }
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState({})
-  const [config, setConfig] = useState({})
   const [toast, setToast] = useState({ message: '', visible: false })
   const toastTimer = useRef(null)
+
+  // LLM provider state
+  const [providers, setProviders] = useState([])
+  const [showAddProvider, setShowAddProvider] = useState(false)
+  const [providerForm, setProviderForm] = useState({ name: '', provider_type: 'anthropic', api_key: '', model: '' })
+
+  // Per-agent LLM priority + config state
+  const [agentLlm, setAgentLlm] = useState({})      // { agentId: [rows] }
+  const [agentConfig, setAgentConfig] = useState({}) // { agentId: { key: val } }
+  const [agentTab, setAgentTab] = useState({})       // { agentId: 'logs'|'config'|'llm' }
+  const [usageMtd, setUsageMtd] = useState([])
+  const [selectedAgent, setSelectedAgent] = useState(null)
+  const [configDraft, setConfigDraft] = useState({})
 
   function showToast(msg) {
     setToast({ message: msg, visible: true })
@@ -501,29 +522,58 @@ export default function AgentsPage() {
     toastTimer.current = setTimeout(() => setToast(t => ({ ...t, visible: false })), 2500)
   }
 
+  async function loadProviders() {
+    try {
+      const data = await apiFetch('GET', '/api/system/providers')
+      if (Array.isArray(data)) setProviders(data)
+    } catch {}
+  }
+
+  async function loadAgentLlm(id) {
+    try {
+      const data = await apiFetch('GET', `/api/system/agents/${id}/llm`)
+      if (Array.isArray(data)) setAgentLlm(prev => ({ ...prev, [id]: data }))
+    } catch {}
+  }
+
+  async function loadAgentConfig(id) {
+    try {
+      const data = await apiFetch('GET', `/api/system/agents/${id}/config`)
+      if (data && !data.error) {
+        setAgentConfig(prev => ({ ...prev, [id]: data }))
+        setConfigDraft(data)
+      }
+    } catch {}
+  }
+
+  async function loadUsageMtd() {
+    try {
+      const since = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
+      const data = await apiFetch('GET', `/api/system/usage?group_by=agent&since=${since}`)
+      if (Array.isArray(data)) setUsageMtd(data)
+    } catch {}
+  }
+
   async function refresh() {
     try {
       const data = await apiFetch('GET', '/api/agents')
       setAgents(data)
-    } catch { /* ignore */ }
-  }
-
-  async function loadConfig() {
-    try {
-      const data = await apiFetch('GET', '/api/config')
-      setConfig(data)
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   useEffect(() => {
-    Promise.all([
-      apiFetch('GET', '/api/agents').then(d => setAgents(d)),
-      apiFetch('GET', '/api/config').then(d => setConfig(d)),
-    ]).catch(() => {})
-
+    refresh()
+    loadProviders()
+    loadUsageMtd()
     const interval = setInterval(refresh, 5000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (!selectedAgent) return
+    loadAgentLlm(selectedAgent)
+    loadAgentConfig(selectedAgent)
+  }, [selectedAgent])
 
   async function handleStart(id) {
     try {
@@ -543,6 +593,58 @@ export default function AgentsPage() {
     refresh()
   }
 
+  async function addProvider() {
+    try {
+      await apiFetch('POST', '/api/system/providers', providerForm)
+      setShowAddProvider(false)
+      setProviderForm({ name: '', provider_type: 'anthropic', api_key: '', model: '' })
+      await loadProviders()
+      showToast('Provider added')
+    } catch { showToast('Failed to add provider') }
+  }
+
+  async function resetProviderCredits(id) {
+    try {
+      await apiFetch('POST', `/api/system/providers/${id}/reset-credits`)
+      await loadProviders()
+    } catch {}
+  }
+
+  async function deleteProvider(id) {
+    if (!confirm('Delete this provider?')) return
+    try {
+      await apiFetch('DELETE', `/api/system/providers/${id}`)
+      await loadProviders()
+    } catch {}
+  }
+
+  async function saveLlmPriority(agentId, list) {
+    try {
+      await apiFetch('PUT', `/api/system/agents/${agentId}/llm`, list)
+      await loadAgentLlm(agentId)
+      showToast('LLM priority saved')
+    } catch { showToast('Save failed') }
+  }
+
+  async function saveAgentConfig(agentId) {
+    try {
+      await apiFetch('PUT', `/api/system/agents/${agentId}/config`, configDraft)
+      showToast('Config saved')
+    } catch { showToast('Save failed') }
+  }
+
+  function getTab(agentId) {
+    return agentTab[agentId] || 'logs'
+  }
+
+  function setTab(agentId, tab) {
+    setAgentTab(prev => ({ ...prev, [agentId]: tab }))
+    if (tab === 'llm' && !agentLlm[agentId]) loadAgentLlm(agentId)
+    if (tab === 'config' && !agentConfig[agentId]) {
+      loadAgentConfig(agentId)
+    }
+  }
+
   const agentIds = Object.keys(agents)
 
   return (
@@ -551,19 +653,171 @@ export default function AgentsPage() {
         <h1 className="page-heading">Configure <em>your agents</em></h1>
         <p className="page-desc">Start, stop, and configure each background agent from one place.</p>
 
+        {/* ── Global LLM Providers Panel ── */}
+        <div style={{ marginBottom: '1.5rem', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>
+          <div style={{ padding: '0.6rem 1rem', background: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong style={{ fontSize: '0.875rem' }}>LLM Providers</strong>
+            <button onClick={() => setShowAddProvider(s => !s)} style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}>+ Add</button>
+          </div>
+
+          {showAddProvider && (
+            <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <input placeholder="Name" value={providerForm.name}
+                onChange={e => setProviderForm(f => ({ ...f, name: e.target.value }))}
+                style={{ flex: 1, minWidth: '120px' }} />
+              <select value={providerForm.provider_type}
+                onChange={e => setProviderForm(f => ({ ...f, provider_type: e.target.value }))}>
+                <option value="anthropic">Anthropic</option>
+                <option value="claude_cli">Claude CLI</option>
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini</option>
+              </select>
+              {providerForm.provider_type !== 'claude_cli' && (
+                <input placeholder="API Key" type="password" value={providerForm.api_key}
+                  onChange={e => setProviderForm(f => ({ ...f, api_key: e.target.value }))}
+                  style={{ flex: 2, minWidth: '200px' }} />
+              )}
+              <input placeholder="Model (e.g. claude-sonnet-4-6)" value={providerForm.model}
+                onChange={e => setProviderForm(f => ({ ...f, model: e.target.value }))}
+                style={{ flex: 2, minWidth: '180px' }} />
+              <button onClick={addProvider} style={{ fontSize: '0.8rem', padding: '0.3rem 0.8rem' }}>Save</button>
+            </div>
+          )}
+
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                {['Name', 'Type', 'Model', 'Status', 'Cost MTD', ''].map(h => (
+                  <th key={h} style={{ textAlign: h === 'Cost MTD' ? 'right' : 'left', padding: '0.5rem 1rem', fontWeight: 500, color: 'var(--muted, #888)', fontSize: '0.75rem' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {providers.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: '1rem', textAlign: 'center', color: 'var(--muted, #888)', fontSize: '0.8125rem' }}>No providers configured — add one above.</td></tr>
+              ) : providers.map(p => (
+                <tr key={p.id} style={{ borderBottom: '1px solid var(--border)', background: !p.has_credits ? 'rgba(245,158,11,0.04)' : 'transparent' }}>
+                  <td style={{ padding: '0.5rem 1rem' }}>{p.name}</td>
+                  <td style={{ padding: '0.5rem 1rem' }}>
+                    <span style={{ fontSize: '0.7rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>{p.provider_type}</span>
+                  </td>
+                  <td style={{ padding: '0.5rem 1rem', color: 'var(--muted, #888)' }}>{p.model || '—'}</td>
+                  <td style={{ padding: '0.5rem 1rem' }}>
+                    {!p.is_enabled ? (
+                      <span style={{ color: '#888', fontSize: '0.75rem' }}>Disabled</span>
+                    ) : !p.has_credits ? (
+                      <span style={{ color: '#f59e0b', fontSize: '0.75rem' }}>
+                        ⚠ Credits exhausted
+                        <button onClick={() => resetProviderCredits(p.id)} style={{ marginLeft: '0.5rem', fontSize: '0.7rem', padding: '0.1rem 0.3rem', cursor: 'pointer' }}>Reset</button>
+                      </span>
+                    ) : (
+                      <span style={{ color: '#22c55e', fontSize: '0.75rem' }}>✓ OK</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '0.5rem 1rem', textAlign: 'right', color: 'var(--muted, #888)' }}>
+                    {p.cost_mtd > 0 ? `$${Number(p.cost_mtd).toFixed(4)}` : '—'}
+                  </td>
+                  <td style={{ padding: '0.5rem 1rem', textAlign: 'right' }}>
+                    <button onClick={() => deleteProvider(p.id)} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted, #888)', fontSize: '0.875rem' }}>×</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* ── Agent List ── */}
         {agentIds.length === 0 ? (
-          <p style={{ color: 'var(--text-3)', fontSize: '.85rem' }}>Loading…</p>
+          <p style={{ color: 'var(--text-3, #888)', fontSize: '.85rem' }}>Loading…</p>
         ) : (
-          agentIds.map(id => (
-            <AgentSection
-              key={id}
-              agent={agents[id]}
-              config={config}
-              onStart={handleStart}
-              onStop={handleStop}
-              onConfigSave={loadConfig}
-            />
-          ))
+          agentIds.map(id => {
+            const agent = agents[id]
+            const s = agent.status
+            const tab = getTab(id)
+            const usageRow = usageMtd.find(u => u.agent_id === id)
+
+            return (
+              <section key={id} className="agent-section" data-id={id} data-status={s}>
+                <div className="agent-header">
+                  <div className="agent-accent" />
+                  <div className="agent-meta">
+                    <div className="agent-name">{agent.name}</div>
+                    <div className="agent-description">{agent.description}</div>
+                  </div>
+                  <div className="agent-controls">
+                    {usageRow?.cost_usd > 0 && (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-3, #888)' }}>
+                        MTD: ${Number(usageRow.cost_usd).toFixed(4)}
+                      </span>
+                    )}
+                    {s === 'running' && agent.startTime && (
+                      <span style={{ fontSize: '.75rem', color: 'var(--text-3, #888)' }}>started {relativeTime(agent.startTime)}</span>
+                    )}
+                    <StatusPill status={s} />
+                    {s === 'running'
+                      ? <button className="btn btn-stop" onClick={() => handleStop(id)}>&#9632; Stop</button>
+                      : <button className="btn btn-primary" onClick={() => handleStart(id)}>&#9654; Start</button>}
+                  </div>
+                </div>
+
+                <AgentStats id={id} stats={agent.stats} />
+
+                {/* Tab buttons */}
+                <div style={{ display: 'flex', gap: '0.25rem', padding: '0.5rem 0 0 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
+                  {['logs', 'config', 'llm'].map(t => (
+                    <button key={t}
+                      onClick={() => setTab(id, t)}
+                      style={{
+                        fontSize: '0.8rem', padding: '0.3rem 0.75rem', borderRadius: '5px',
+                        background: tab === t ? 'var(--text)' : 'transparent',
+                        color: tab === t ? 'var(--bg)' : 'var(--text)',
+                        border: `1px solid ${tab === t ? 'var(--text)' : 'var(--border)'}`,
+                        cursor: 'pointer',
+                      }}>
+                      {t === 'llm' ? 'LLM' : t.charAt(0).toUpperCase() + t.slice(1)}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tab content */}
+                <div style={{ padding: '0.75rem 0' }}>
+                  {/* Logs tab */}
+                  {tab === 'logs' && (
+                    <LogViewer agentId={id} expanded={true} />
+                  )}
+
+                  {/* Config tab */}
+                  {tab === 'config' && (
+                    <div>
+                      {id === 'email' && agentConfig[id] && (
+                        <EmailConfigForm config={agentConfig[id]} onSave={() => loadAgentConfig(id)} />
+                      )}
+                      {id === 'limitless' && agentConfig[id] && (
+                        <LimitlessConfigForm config={agentConfig[id]} onSave={() => loadAgentConfig(id)} />
+                      )}
+                      {(id === 'openai' || id === 'gemini') && (
+                        <AiImporterConfigForm agentId={id} config={agentConfig[id] || {}} onSave={() => loadAgentConfig(id)} />
+                      )}
+                      {!['email', 'limitless', 'openai', 'gemini'].includes(id) && (
+                        <div style={{ color: 'var(--text-3, #888)', fontSize: '.825rem' }}>No configurable options for this agent.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* LLM tab */}
+                  {tab === 'llm' && (
+                    <AgentLlmTab
+                      agentId={id}
+                      llmList={agentLlm[id] || []}
+                      allProviders={providers}
+                      onSave={saveLlmPriority}
+                      usageRow={usageRow}
+                    />
+                  )}
+                </div>
+              </section>
+            )
+          })
         )}
       </div>
       <Toast message={toast.message} visible={toast.visible} />
