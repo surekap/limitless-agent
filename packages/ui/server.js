@@ -31,6 +31,66 @@ try {
   console.warn('[ui] DB pool creation failed:', e.message);
 }
 
+// ── Schema + Config Migration ──────────────────────────────────────────────────
+
+async function runSystemSchema() {
+  if (!db) return;
+  const sql = fs.readFileSync(
+    path.resolve(__dirname, '../agents/shared/sql/system-schema.sql'),
+    'utf8'
+  );
+  await db.query(sql);
+  console.log('[server] system schema ensured');
+}
+
+async function migrateEnvToDb() {
+  if (!db) return;
+  const { setConfig, getConfig } = require('../agents/shared/config');
+
+  let migrated = 0;
+
+  const simpleKeys = [
+    'LIMITLESS_API_KEY', 'TAVILY_API_KEY', 'PEOPLEDATALABS_API_KEY',
+    'SERPAPI_API_KEY', 'NOTION_TOKEN', 'TODOIST_API_KEY', 'PERPLEXITY_API_KEY',
+    'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+  ];
+  for (const envKey of simpleKeys) {
+    if (!process.env[envKey]) continue;
+    const existing = await getConfig(`system.${envKey}`);
+    if (existing == null) {
+      await setConfig(`system.${envKey}`, process.env[envKey]);
+      migrated++;
+    }
+  }
+
+  // Gmail accounts: build array from GMAIL_EMAIL_N / GMAIL_APP_PASSWORD_N pairs
+  const existingGmail = await getConfig('email.gmail_accounts');
+  if (existingGmail == null) {
+    const accounts = [];
+    for (let i = 1; ; i++) {
+      const email = process.env[`GMAIL_EMAIL_${i}`];
+      const pass  = process.env[`GMAIL_APP_PASSWORD_${i}`];
+      if (!email) break;
+      accounts.push({ email, app_password: pass || '' });
+    }
+    if (accounts.length > 0) {
+      await setConfig('email.gmail_accounts', accounts);
+      migrated++;
+    }
+  }
+
+  // Limitless fetch config
+  const ltExisting = await getConfig('limitless.fetch_days');
+  if (ltExisting == null && process.env.FETCH_DAYS) {
+    await setConfig('limitless.fetch_days', Number(process.env.FETCH_DAYS));
+    migrated++;
+  }
+
+  if (migrated > 0) {
+    console.log(`[server] migrated ${migrated} config keys from .env.local to DB`);
+  }
+}
+
 // ── Agent definitions ─────────────────────────────────────────────────────────
 
 const AGENTS = {
@@ -1381,8 +1441,21 @@ app.get('/api/search/stats', async (req, res) => {
 // Detect agents that survived a server restart
 recoverAgents();
 
-const PORT = process.env.UI_PORT || 4001;
-app.listen(PORT, () => {
-  console.log(`\n  secondbrain UI → http://localhost:${PORT}\n`);
-  if (db) indexer.start(db);
-});
+async function startServer() {
+  if (db) {
+    try {
+      await runSystemSchema();
+      await migrateEnvToDb();
+    } catch (err) {
+      console.error('[server] startup migration failed:', err.message);
+    }
+  }
+
+  const PORT = process.env.UI_PORT || 4001;
+  app.listen(PORT, () => {
+    console.log(`\n  secondbrain UI → http://localhost:${PORT}\n`);
+    if (db) indexer.start(db);
+  });
+}
+
+startServer();
