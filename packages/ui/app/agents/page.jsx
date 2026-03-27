@@ -98,16 +98,6 @@ function AgentStats({ id, stats }) {
   return null
 }
 
-function PanelToggle({ label, expanded, onToggle }) {
-  return (
-    <button className="panel-toggle" aria-expanded={String(expanded)} onClick={onToggle}>
-      <svg className="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="M4 2l4 4-4 4" />
-      </svg>
-      {label}
-    </button>
-  )
-}
 
 function LogViewer({ agentId, expanded }) {
   const [logs, setLogs] = useState([])
@@ -513,8 +503,6 @@ export default function AgentsPage() {
   const [agentConfig, setAgentConfig] = useState({}) // { agentId: { key: val } }
   const [agentTab, setAgentTab] = useState({})       // { agentId: 'logs'|'config'|'llm' }
   const [usageMtd, setUsageMtd] = useState([])
-  const [selectedAgent, setSelectedAgent] = useState(null)
-  const [configDraft, setConfigDraft] = useState({})
 
   function showToast(msg) {
     setToast({ message: msg, visible: true })
@@ -541,7 +529,6 @@ export default function AgentsPage() {
       const data = await apiFetch('GET', `/api/system/agents/${id}/config`)
       if (data && !data.error) {
         setAgentConfig(prev => ({ ...prev, [id]: data }))
-        setConfigDraft(data)
       }
     } catch {}
   }
@@ -569,11 +556,6 @@ export default function AgentsPage() {
     return () => clearInterval(interval)
   }, [])
 
-  useEffect(() => {
-    if (!selectedAgent) return
-    loadAgentLlm(selectedAgent)
-    loadAgentConfig(selectedAgent)
-  }, [selectedAgent])
 
   async function handleStart(id) {
     try {
@@ -626,12 +608,6 @@ export default function AgentsPage() {
     } catch { showToast('Save failed') }
   }
 
-  async function saveAgentConfig(agentId) {
-    try {
-      await apiFetch('PUT', `/api/system/agents/${agentId}/config`, configDraft)
-      showToast('Config saved')
-    } catch { showToast('Save failed') }
-  }
 
   function getTab(agentId) {
     return agentTab[agentId] || 'logs'
