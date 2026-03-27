@@ -109,7 +109,7 @@ async function migrateEnvToDb() {
   await seed('limitless.PROCESSING_BATCH_SIZE',   '15');
 
   // WhatsApp — CLIENT_ID has no sensible default; leave blank for user to fill
-  await seed('whatsapp.CLIENT_ID', '');
+  await seed('system.WHATSAPP_CLIENT_ID', '');
 
   if (migrated > 0) {
     console.log(`[server] seeded ${migrated} config keys to DB`);
@@ -351,7 +351,7 @@ async function startAgent(id) {
   let extraEnv = {};
   if (id === 'whatsapp') {
     const { getConfig } = require('../agents/shared/config');
-    const clientId = await getConfig('whatsapp.CLIENT_ID');
+    const clientId = await getConfig('system.WHATSAPP_CLIENT_ID');
     if (!clientId) return { error: 'WhatsApp CLIENT_ID is not configured. Set it in the Config tab first.' };
     extraEnv.CLIENT_ID = clientId;
     delete waQr[id];

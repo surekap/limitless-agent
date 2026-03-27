@@ -528,18 +528,18 @@ function ResearchConfigForm({ config, onSave }) {
 }
 
 function WhatsAppConfigForm({ config, onSave }) {
-  const [clientId, setClientId] = useState(config['whatsapp.CLIENT_ID'] || '')
+  const [clientId, setClientId] = useState(config.WHATSAPP_CLIENT_ID || '')
   const [saving, setSaving]     = useState(false)
   const [feedback, setFeedback] = useState('')
 
-  useEffect(() => { setClientId(config['whatsapp.CLIENT_ID'] || '') }, [config])
+  useEffect(() => { setClientId(config.WHATSAPP_CLIENT_ID || '') }, [config])
 
   async function handleSubmit(e) {
     e.preventDefault()
     if (!clientId.trim()) { setFeedback('Client ID is required'); return }
     setSaving(true)
     try {
-      await onSave({ 'whatsapp.CLIENT_ID': clientId.trim() })
+      await onSave({ WHATSAPP_CLIENT_ID: clientId.trim() })
       setFeedback('Saved')
       setTimeout(() => setFeedback(''), 3500)
     } catch { setFeedback('Save failed') }
