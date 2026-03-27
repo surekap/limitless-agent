@@ -6,6 +6,8 @@ const db = require('@secondbrain/db')
 const CACHE_TTL_MS = 60 * 1000
 const _cache = new Map()
 
+const ALLOWED_SCHEMAS = new Set(['system', 'email', 'limitless', 'projects', 'relationships'])
+
 /**
  * Read a config value.
  * key format: '<schema>.<key>'  e.g. 'system.TAVILY_API_KEY' or 'email.gmail_accounts'
@@ -17,6 +19,7 @@ async function getConfig(key) {
   if (cached && cached.expiresAt > now) return cached.value
 
   const [schema, ...rest] = key.split('.')
+  if (!ALLOWED_SCHEMAS.has(schema)) throw new Error(`Invalid config schema: ${schema}`)
   const dbKey = rest.join('.')
 
   const { rows } = await db.query(
@@ -34,6 +37,7 @@ async function getConfig(key) {
  */
 async function setConfig(key, value) {
   const [schema, ...rest] = key.split('.')
+  if (!ALLOWED_SCHEMAS.has(schema)) throw new Error(`Invalid config schema: ${schema}`)
   const dbKey = rest.join('.')
 
   await db.query(
