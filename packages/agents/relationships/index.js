@@ -30,6 +30,12 @@ async function ensureSchema() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function formatPhoneJid(jid) {
+  const num = jid.replace('@c.us', '').replace('@g.us', '')
+  if (/^\d{7,15}$/.test(num)) return '+' + num
+  return num
+}
+
 function normalizeName(name) {
   if (!name) return null
   return name.toLowerCase().trim().replace(/\s+/g, ' ')
@@ -135,21 +141,21 @@ function buildMediaSnippetAndMeta(msg) {
     const caption = (msg.caption || '').trim()
     return {
       snippet:  caption || '📷 Photo',
-      metadata: { msg_type: 'image', thumbnail_b64: body.slice(0, 4000) },
+      metadata: { msg_type: 'image', thumbnail_b64: body.slice(0, 4000), wa_msg_id: msg.wa_msg_id || null },
     }
   }
   if (type === 'video') {
     const caption = (msg.caption || '').trim()
     return {
       snippet:  caption || '🎥 Video',
-      metadata: { msg_type: 'video', thumbnail_b64: body.slice(0, 4000) },
+      metadata: { msg_type: 'video', thumbnail_b64: body.slice(0, 4000), wa_msg_id: msg.wa_msg_id || null },
     }
   }
   if (type === 'document') {
     const name = (msg.filename || msg.caption || '').trim()
     return {
       snippet:  name ? `📎 ${name}` : '📎 Document',
-      metadata: { msg_type: 'document', filename: msg.filename || null, thumbnail_b64: body.slice(0, 4000) },
+      metadata: { msg_type: 'document', filename: msg.filename || null, thumbnail_b64: body.slice(0, 4000), wa_msg_id: msg.wa_msg_id || null },
     }
   }
   if (type === 'ptt' || type === 'audio') {
@@ -333,6 +339,17 @@ async function runAnalysis() {
 
           if (existingId && lastRunAt) {
             // Existing contact: just add new messages, skip Claude
+            // Also update display_name from chat_metadata if current name is a phone number
+            if (contact.display_name && !/^\+?[0-9]{7,15}$/.test(contact.display_name)) {
+              await db.query(`
+                UPDATE relationships.contacts SET
+                  display_name    = CASE WHEN manual_overrides ? 'display_name' THEN display_name ELSE $1 END,
+                  normalized_name = CASE WHEN manual_overrides ? 'display_name' THEN normalized_name ELSE $2 END,
+                  updated_at      = NOW()
+                WHERE id = $3
+                  AND (display_name ~ '^[0-9]' OR display_name LIKE '+%' OR display_name LIKE 'Unknown%')
+              `, [contact.display_name, contact.display_name?.toLowerCase().replace(/\s+/g, '_'), existingId])
+            }
             const newMessages = messages.filter(m => m.ts && new Date(m.ts) > lastRunAt)
             if (newMessages.length > 0) {
               const added = await upsertCommunications(existingId, newMessages, contact.chat_id)
@@ -485,7 +502,11 @@ async function runAnalysis() {
           ? emails.filter(e => !e.date || new Date(e.date) > lastRunAt)
           : emails
         for (const em of emailsToProcess) {
-          const snippet = (em.body_text || em.subject || '').replace(/\s+/g, ' ').slice(0, 280)
+          // Build snippet including extracted attachment text if available
+          const attachments = Array.isArray(em.attachments) ? em.attachments : (em.attachments ? JSON.parse(em.attachments) : [])
+          const attachText = attachments.filter(a => a.extracted_text).map(a => `[${a.filename||'file'}]: ${a.extracted_text.slice(0,100)}`).join(' ')
+          const baseSnippet = (em.body_text || em.subject || '').replace(/\s+/g, ' ')
+          const snippet = (baseSnippet + (attachText ? ' ' + attachText : '')).slice(0, 280)
           try {
             await db.query(`
               INSERT INTO relationships.communications
@@ -610,13 +631,17 @@ async function runAnalysis() {
         `, [contact.chat_id])
 
         const contactId = existing[0]?.id || null
-        const name = existing[0]?.display_name || contact.display_name || contact.chat_id.replace('@c.us', '')
+        const name = existing[0]?.display_name || contact.display_name || formatPhoneJid(contact.chat_id)
         const daysSince = Math.round((Date.now() - new Date(contact.last_msg_at)) / 86400000)
+
+        const bodyText = (contact.last_msg_body || '')
+        const isJidBody = /^\d+@[cg]\.us$/.test(bodyText.trim())
+        const displayBody = isJidBody ? '(media or system message)' : bodyText.slice(0, 120)
 
         const insightId = await upsertInsight(contactId, {
           insight_type: 'awaiting_reply',
           title: `Reply to ${name}`,
-          description: `Last message ${daysSince}d ago: "${(contact.last_msg_body || '').slice(0, 120)}"`,
+          description: `Last message ${daysSince}d ago: "${displayBody}"`,
           priority: daysSince > 7 ? 'high' : daysSince > 3 ? 'medium' : 'low',
           source_ref: `awaiting:${contact.chat_id}`,
         })
@@ -632,7 +657,8 @@ async function runAnalysis() {
 
     for (const group of activeGroups.slice(0, 10)) {
       try {
-        const groupName = await extractor.getGroupName(group.chat_id) || group.chat_id
+        const rawId = group.chat_id.replace('@g.us', '')
+        const groupName = await extractor.getGroupName(group.chat_id) || `Group (${rawId.length > 20 ? rawId.slice(-8) : rawId})`
 
         // Build sample context for richer insight description
         const sampleText = (group.sample_msgs || [])

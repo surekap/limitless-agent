@@ -18,15 +18,23 @@ async function extractDirectChatContacts() {
         COUNT(*) FILTER (WHERE (data->'id'->>'fromMe')::boolean = false) AS their_msgs,
         MAX(ts) AS last_msg_at,
         MIN(ts) AS first_msg_at,
-        (
-          SELECT m2.data->'_data'->>'notifyName'
-          FROM public.messages m2
-          WHERE m2.chat_id = m.chat_id
-            AND m2.data->'_data'->>'notifyName' IS NOT NULL
-            AND m2.data->'_data'->>'notifyName' != ''
-          GROUP BY m2.data->'_data'->>'notifyName'
-          ORDER BY COUNT(*) DESC
-          LIMIT 1
+        COALESCE(
+          -- Prefer address-book name from chat_metadata (set by whatsapp-web-connector)
+          NULLIF((SELECT cm.name FROM public.chat_metadata cm
+                  WHERE cm.chat_id = m.chat_id
+                    AND cm.name IS NOT NULL
+                    AND cm.name NOT LIKE '+%'
+                    AND cm.name NOT LIKE '%@%'
+                  LIMIT 1), ''),
+          -- Fall back to push name from messages
+          (SELECT m2.data->'_data'->>'notifyName'
+           FROM public.messages m2
+           WHERE m2.chat_id = m.chat_id
+             AND m2.data->'_data'->>'notifyName' IS NOT NULL
+             AND m2.data->'_data'->>'notifyName' != ''
+           GROUP BY m2.data->'_data'->>'notifyName'
+           ORDER BY COUNT(*) DESC
+           LIMIT 1)
         ) AS display_name
       FROM public.messages m
       WHERE chat_id LIKE '%@c.us'
@@ -59,7 +67,8 @@ async function getDirectMessages(chatId, limit = 30) {
         data->'_data'->>'caption'          AS caption,
         data->'_data'->>'filename'         AS filename,
         ts,
-        data->'_data'->>'notifyName'       AS notify_name
+        data->'_data'->>'notifyName'       AS notify_name,
+        data->'id'->>'_serialized'         AS wa_msg_id
       FROM public.messages
       WHERE chat_id = $1
         AND event IN ('message', 'message_create', 'message_historical')
@@ -113,7 +122,8 @@ async function getGroupSampleMessages(groupChatId, limit = 15) {
         ts,
         data->'_data'->>'notifyName'      AS notify_name,
         data->>'author'                   AS author_raw,
-        data->'id'->>'participant'        AS participant
+        data->'id'->>'participant'        AS participant,
+        data->'id'->>'_serialized'        AS wa_msg_id
       FROM public.messages
       WHERE chat_id = $1
         AND event IN ('message', 'message_create', 'message_historical')
@@ -130,29 +140,28 @@ async function getGroupSampleMessages(groupChatId, limit = 15) {
 }
 
 /**
- * Try to get the group name from group_update events.
+ * Try to get the group name, checking chat_metadata first then group_update events.
  */
 async function getGroupName(groupChatId) {
   try {
+    // First try chat_metadata table (populated by whatsapp-web-connector)
+    const { rows: meta } = await db.query(
+      'SELECT name FROM public.chat_metadata WHERE chat_id = $1 AND name IS NOT NULL LIMIT 1',
+      [groupChatId]
+    )
+    if (meta.length > 0 && meta[0].name) return meta[0].name
+
+    // Fallback: group_update events with subject
     const { rows } = await db.query(`
-      SELECT
-        COALESCE(
-          data->>'subject',
-          data->'body'->>'subject'
-        ) AS group_name
+      SELECT COALESCE(data->>'subject', data->'body'->>'subject') AS group_name
       FROM public.messages
       WHERE chat_id = $1
         AND event = 'group_update'
-        AND (
-          data->>'subject' IS NOT NULL
-          OR data->'body'->>'subject' IS NOT NULL
-        )
-      ORDER BY ts DESC
-      LIMIT 1
+        AND (data->>'subject' IS NOT NULL OR data->'body'->>'subject' IS NOT NULL)
+      ORDER BY ts DESC LIMIT 1
     `, [groupChatId])
     if (rows.length > 0 && rows[0].group_name) return rows[0].group_name
 
-    // Fallback: try to get from any message notifyName or just return null
     return null
   } catch (err) {
     console.error('[extractor] getGroupName error:', err.message)
@@ -232,7 +241,7 @@ async function getEmailContacts() {
 async function getEmailsBySender(fromAddress, limit = 20) {
   try {
     const { rows } = await db.query(`
-      SELECT id, subject, date, is_read, body_text, to_addresses
+      SELECT id, subject, date, is_read, body_text, to_addresses, attachments
       FROM email.emails
       WHERE from_address = $1
       ORDER BY date DESC

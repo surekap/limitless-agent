@@ -2,6 +2,15 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
+// Replace raw WhatsApp IDs (e.g. "1234@g.us") with human-readable group names.
+// Also strips trailing @c.us from phone numbers.
+function resolveGroupIds(text, groupsMap) {
+  if (!text || !groupsMap) return text
+  return text
+    .replace(/(\d{5,})@g\.us/g, (_, id) => groupsMap[id + '@g.us'] || groupsMap[id] || 'WhatsApp group')
+    .replace(/(\d{5,})@c\.us/g, (_, num) => '+' + num)
+}
+
 function fmtDate(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -41,20 +50,25 @@ const PRIORITY_COLOR = {
   low:    'oklch(50% 0.08 250)',
 }
 
-function InsightCard({ item, type, onAction, onDismiss }) {
+function InsightCard({ item, type, onAction, onDismiss, groupsMap }) {
   const color = PRIORITY_COLOR[item.priority] || 'var(--text-3)'
   const label = type === 'relationship' ? item.contact_name : item.project_name
+  const href  = type === 'relationship'
+    ? `/relationships?contact=${item.contact_id}`
+    : `/projects?project=${item.project_id}`
+  const title = resolveGroupIds(item.title || item.content, groupsMap)
+  const desc  = resolveGroupIds(item.description, groupsMap)
   return (
     <div className="insight-card">
       <div className="ic-stripe" style={{ background: color }} />
-      <div className="ic-body">
+      <Link href={href} className="ic-body" style={{ textDecoration: 'none', color: 'inherit' }}>
         <div className="ic-top">
           {label && <span className="ic-label">{label}</span>}
           <span className="ic-type">{(item.insight_type || '').replace(/_/g, ' ')}</span>
         </div>
-        <div className="ic-title">{item.title || item.content}</div>
-        {item.description && <div className="ic-desc">{item.description}</div>}
-      </div>
+        <div className="ic-title">{title}</div>
+        {desc && <div className="ic-desc">{desc}</div>}
+      </Link>
       <div className="ic-actions">
         {onAction && (
           <button className="ic-btn" onClick={() => onAction(item.id)} title="Mark actioned">✓</button>
@@ -73,22 +87,29 @@ export default function DashboardPage() {
   const [relStats, setRelStats]           = useState(null)
   const [projStats, setProjStats]         = useState(null)
   const [recentActivity, setRecentActivity] = useState([])
+  const [groupsMap, setGroupsMap]         = useState({})
   const [loading, setLoading]             = useState(true)
 
   async function load() {
     try {
-      const [ri, pi, rs, ps, ra] = await Promise.all([
+      const [ri, pi, rs, ps, ra, gr] = await Promise.all([
         fetch('/api/relationships/insights').then(r => r.json()),
         fetch('/api/projects/insights/open').then(r => r.json()),
         fetch('/api/relationships/stats').then(r => r.json()),
         fetch('/api/projects/stats').then(r => r.json()),
         fetch('/api/projects/activity/recent').then(r => r.json()),
+        fetch('/api/relationships/groups').then(r => r.json()),
       ])
       if (Array.isArray(ri)) setRelInsights(ri)
       if (Array.isArray(pi)) setProjInsights(pi)
       if (rs && !rs.error)  setRelStats(rs)
       if (ps && !ps.error)  setProjStats(ps)
       if (Array.isArray(ra)) setRecentActivity(ra.slice(0, 8))
+      if (Array.isArray(gr)) {
+        const map = {}
+        for (const g of gr) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
+        setGroupsMap(map)
+      }
     } catch { /* ignore */ }
     setLoading(false)
   }
@@ -185,6 +206,7 @@ export default function DashboardPage() {
         .ic-type { font-size:.65rem; color:var(--text-3); background:var(--surface-2); border:1px solid var(--border); border-radius:100px; padding:.08rem .35rem; }
         .ic-title { font-size:.8rem; font-weight:500; color:var(--text); line-height:1.35; }
         .ic-desc { font-size:.72rem; color:var(--text-2); line-height:1.4; margin-top:.15rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+        .ic-body:hover .ic-title { color: var(--accent); }
         .ic-actions { grid-column:3; display:flex; gap:.25rem; padding-top:.1rem; }
         .ic-btn { background:none; border:1px solid var(--border); border-radius:5px; width:22px; height:22px; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:.7rem; color:var(--text-2); transition:all .1s; }
         .ic-btn:hover { border-color:var(--border-strong); color:var(--text); background:var(--surface-2); }
@@ -300,7 +322,8 @@ export default function DashboardPage() {
                           item={item}
                           type={item._type}
                           onAction={item._type === 'relationship' ? handleAction : null}
-                          onDismiss={item._type === 'relationship' ? handleDismiss : (handleProjResolve)}
+                          onDismiss={item._type === 'relationship' ? handleDismiss : handleProjResolve}
+                          groupsMap={groupsMap}
                         />
                       ))
                     )}

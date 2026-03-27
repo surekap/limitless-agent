@@ -1,18 +1,7 @@
 'use strict'
 
-const Anthropic = require('@anthropic-ai/sdk')
+const aiClient = require('../../shared/ai-client')
 const db        = require('@secondbrain/db')
-
-const MODEL = 'claude-sonnet-4-6'
-
-let client = null
-
-function getClient() {
-  if (!client) {
-    client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY })
-  }
-  return client
-}
 
 function parseJSON(text) {
   const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
@@ -124,6 +113,13 @@ async function gatherDiscoveryData() {
 async function discoverProjects(data) {
   const { emailSubjects, lifelogTitles, whatsappChats } = data
 
+  // Load existing project names so Claude can reuse them instead of creating variants
+  let existingNames = []
+  try {
+    const { rows } = await db.query(`SELECT name FROM projects.projects WHERE is_archived = FALSE ORDER BY name`)
+    existingNames = rows.map(r => r.name)
+  } catch { /* non-fatal */ }
+
   const emailList = emailSubjects.slice(0, 100).map(e =>
     `- "${e.subject}" (${e.count} emails, last: ${e.recent ? new Date(e.recent).toLocaleDateString() : 'unknown'})`
   ).join('\n')
@@ -136,8 +132,13 @@ async function discoverProjects(data) {
     `- ${c.name} (${c.msg_count} messages)`
   ).join('\n')
 
+  const existingList = existingNames.length > 0
+    ? `\nExisting projects (reuse these exact names if the topic matches — do NOT create a new entry for something already tracked):\n${existingNames.map(n => `- ${n}`).join('\n')}\n`
+    : ''
+
   const today = new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' })
   const prompt = `You are analyzing communications for a business person. Today is ${today}. Based on these email subjects, meeting transcripts, and WhatsApp conversations, identify the distinct projects, matters, or initiatives this person is managing.
+${existingList}
 
 Email thread subjects (with frequency):
 ${emailList || '(none)'}
@@ -170,13 +171,12 @@ Guidelines:
 - Projects where the most recent email activity is more than 1 year ago and there are no recent meeting transcripts or WhatsApp messages on the topic should be marked "stalled" or "completed", NOT "active"`
 
   try {
-    const response = await getClient().messages.create({
-      model: MODEL,
+    const response = await aiClient.create({
       max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.content[0]?.text || ''
+    const text = response.text || ''
     const result = parseJSON(text)
     return Array.isArray(result) ? result : []
   } catch (err) {

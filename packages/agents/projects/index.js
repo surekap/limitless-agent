@@ -29,17 +29,49 @@ async function ensureSchema() {
 
 // ── Upsert project by name ────────────────────────────────────────────────────
 
+function nameWords(name) {
+  return new Set(
+    (name || '').toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !['and','the','for','with','from','this','that'].includes(w))
+  )
+}
+
+function wordOverlap(a, b) {
+  const wa = nameWords(a)
+  const wb = nameWords(b)
+  if (!wa.size || !wb.size) return 0
+  let common = 0
+  for (const w of wa) if (wb.has(w)) common++
+  return common / Math.min(wa.size, wb.size)
+}
+
 async function upsertProject(proj) {
   try {
-    // Look for existing project with same name (case-insensitive)
+    // First try exact case-insensitive match
     const { rows: existing } = await db.query(`
-      SELECT id FROM projects.projects
+      SELECT id, name FROM projects.projects
       WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
+        AND is_archived = FALSE
       LIMIT 1
     `, [proj.name])
 
-    if (existing.length > 0) {
-      const id = existing[0].id
+    // Fall back to fuzzy word-overlap match (>= 70% of shorter name's words match)
+    let matchId = existing[0]?.id
+    if (!matchId) {
+      const { rows: allProjs } = await db.query(`
+        SELECT id, name FROM projects.projects WHERE is_archived = FALSE
+      `)
+      const fuzzy = allProjs.find(p => wordOverlap(p.name, proj.name) >= 0.70)
+      if (fuzzy) {
+        console.log(`   🔀 Fuzzy match: "${proj.name}" → "${fuzzy.name}"`)
+        matchId = fuzzy.id
+      }
+    }
+
+    if (matchId) {
+      const id = matchId
       // On re-discovery, update description/tags — but respect manual overrides
       await db.query(`
         UPDATE projects.projects SET
@@ -220,12 +252,18 @@ async function runAnalysis() {
       `)
       projectsToAnalyze = rows
     } else {
-      // Only re-analyze projects that got new project_communications since lastRunAt
+      // Re-analyze projects that got new comms since lastRunAt OR have comms but no ai_summary yet
       const { rows } = await db.query(`
         SELECT DISTINCT p.* FROM projects.projects p
-        JOIN projects.project_communications pc ON pc.project_id = p.id
         WHERE p.is_archived = FALSE
-          AND pc.created_at > $1
+          AND p.comm_count > 0
+          AND (
+            p.ai_summary IS NULL
+            OR EXISTS (
+              SELECT 1 FROM projects.project_communications pc
+              WHERE pc.project_id = p.id AND pc.created_at > $1
+            )
+          )
         ORDER BY p.last_activity_at DESC NULLS LAST
       `, [lastRunAt])
       projectsToAnalyze = rows
@@ -237,7 +275,7 @@ async function runAnalysis() {
         const comms = await analyzer.getProjectCommunications(project.id, 30)
         console.log(`   Analyzing "${project.name}" (${comms.length} comms)...`)
         await analyzer.analyzeProject(project, comms)
-        await analyzer.sleep(800)
+        await analyzer.sleep(3000)
       } catch (err) {
         console.error(`   ✗ Error analyzing "${project.name}":`, err.message)
       }

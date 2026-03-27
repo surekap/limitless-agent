@@ -86,6 +86,15 @@ function AgentStats({ id, stats }) {
       </div>
     )
   }
+  if (id === 'openai' || id === 'gemini') {
+    return (
+      <div className="agent-stats">
+        <div className="stat"><span className="stat-val">{formatNum(stats.total_conversations)}</span><span className="stat-label">Conversations</span></div>
+        <div className="stat"><span className="stat-val">{formatNum(stats.total_messages)}</span><span className="stat-label">Messages</span></div>
+        <div className="stat"><span className="stat-val dim">{relativeTime(stats.last_import)}</span><span className="stat-label">Last import</span></div>
+      </div>
+    )
+  }
   return null
 }
 
@@ -243,11 +252,16 @@ function EmailConfigForm({ config, onSave }) {
 }
 
 function LimitlessConfigForm({ config, onSave }) {
-  const [apiKey, setApiKey] = useState(config.LIMITLESS_API_KEY || '')
+  const [limitlessApiKey, setLimitlessApiKey] = useState(config.LIMITLESS_API_KEY || '')
   const [fetchCron, setFetchCron] = useState(config.FETCH_INTERVAL_CRON || '*/5 * * * *')
   const [processCron, setProcessCron] = useState(config.PROCESS_INTERVAL_CRON || '*/1 * * * *')
   const [fetchDays, setFetchDays] = useState(config.FETCH_DAYS || '1')
   const [batchSize, setBatchSize] = useState(config.PROCESSING_BATCH_SIZE || '15')
+  const [aiProvider, setAiProvider] = useState(config.AI_PROVIDER || 'anthropic')
+  const [anthropicKey, setAnthropicKey] = useState(config.ANTHROPIC_API_KEY || '')
+  const [openaiKey, setOpenaiKey] = useState(config.OPENAI_API_KEY || '')
+  const [anthropicModel, setAnthropicModel] = useState(config.AI_ANTHROPIC_MODEL || '')
+  const [openaiModel, setOpenaiModel] = useState(config.AI_OPENAI_MODEL || '')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState('')
 
@@ -255,11 +269,17 @@ function LimitlessConfigForm({ config, onSave }) {
     e.preventDefault()
     setSaving(true)
     const updates = {
-      LIMITLESS_API_KEY: apiKey,
+      LIMITLESS_API_KEY: limitlessApiKey,
       FETCH_INTERVAL_CRON: fetchCron,
       PROCESS_INTERVAL_CRON: processCron,
       FETCH_DAYS: fetchDays,
       PROCESSING_BATCH_SIZE: batchSize,
+      AI_PROVIDER: aiProvider,
+      ANTHROPIC_API_KEY: anthropicKey,
+      OPENAI_API_KEY: openaiKey,
+      AI_ANTHROPIC_MODEL: aiProvider === 'claude-cli' ? '' : anthropicModel,
+      AI_OPENAI_MODEL: openaiModel,
+      AI_CLAUDE_CLI_MODEL: aiProvider === 'claude-cli' ? anthropicModel : '',
     }
     try {
       const r = await apiFetch('POST', '/api/config', { agent: 'limitless', updates })
@@ -276,11 +296,45 @@ function LimitlessConfigForm({ config, onSave }) {
 
   return (
     <form className="config-form" onSubmit={handleSubmit}>
-      <div className="form-section-title">API Access</div>
+      <div className="form-section-title">Limitless API</div>
       <div className="form-row">
         <label>API Key</label>
-        <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-…" autoComplete="new-password" />
+        <input type="password" value={limitlessApiKey} onChange={e => setLimitlessApiKey(e.target.value)} placeholder="sk-…" autoComplete="new-password" />
       </div>
+      <div className="divider" />
+      <div className="form-section-title">AI Provider <span style={{ fontWeight: 400, fontSize: '.7rem', color: 'var(--text-3)', textTransform: 'none', letterSpacing: 0 }}>(applies to all agents — fallback is automatic)</span></div>
+      <div className="form-row">
+        <label>Preferred provider</label>
+        <select value={aiProvider} onChange={e => setAiProvider(e.target.value)}>
+          <option value="claude-cli">Claude CLI / OAuth (uses Claude.ai subscription)</option>
+          <option value="anthropic">Anthropic API key</option>
+          <option value="openai">OpenAI API key</option>
+        </select>
+      </div>
+      {aiProvider === 'claude-cli' && (
+        <div className="form-row">
+          <label>Model alias</label>
+          <input type="text" value={anthropicModel} onChange={e => setAnthropicModel(e.target.value)} placeholder="sonnet (default)" />
+        </div>
+      )}
+      {aiProvider !== 'claude-cli' && (<>
+        <div className="form-row">
+          <label>Anthropic API Key</label>
+          <input type="password" value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="sk-ant-…" autoComplete="new-password" />
+        </div>
+        <div className="form-row">
+          <label>Anthropic model</label>
+          <input type="text" value={anthropicModel} onChange={e => setAnthropicModel(e.target.value)} placeholder="claude-sonnet-4-6 (default)" />
+        </div>
+        <div className="form-row">
+          <label>OpenAI API Key</label>
+          <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} placeholder="sk-…" autoComplete="new-password" />
+        </div>
+        <div className="form-row">
+          <label>OpenAI model</label>
+          <input type="text" value={openaiModel} onChange={e => setOpenaiModel(e.target.value)} placeholder="gpt-4o (default)" />
+        </div>
+      </>)}
       <div className="divider" />
       <div className="form-section-title">Schedule</div>
       <div className="form-row">
@@ -305,6 +359,63 @@ function LimitlessConfigForm({ config, onSave }) {
         <div>
           <span className={`save-feedback${feedback ? ' visible' : ''}`}>{feedback}</span>
         </div>
+        <button type="submit" className="btn btn-save" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+    </form>
+  )
+}
+
+function AiImporterConfigForm({ agentId, config, onSave }) {
+  const key         = agentId === 'openai' ? 'OPENAI_EXPORT_PATH' : 'GEMINI_EXPORT_PATH'
+  const placeholder = agentId === 'openai'
+    ? '~/Downloads/openai-export/conversations.json'
+    : '~/Downloads/gemini-export/Gemini Apps Activity.json'
+  const hint = agentId === 'openai'
+    ? 'chatgpt.com → Settings → Data controls → Export data → unzip → conversations.json'
+    : 'takeout.google.com → select "Gemini Apps" → download → unzip → Gemini Apps Activity.json'
+
+  const [exportPath, setExportPath]   = useState(config[key] || '')
+  const [watchMins, setWatchMins]     = useState(config.AI_WATCH_INTERVAL_MINUTES || '')
+  const [saving, setSaving]           = useState(false)
+  const [feedback, setFeedback]       = useState('')
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    const updates = { [key]: exportPath }
+    if (watchMins) updates.AI_WATCH_INTERVAL_MINUTES = watchMins
+    try {
+      const r = await apiFetch('POST', '/api/config', { agent: agentId, updates })
+      if (r.error) {
+        setFeedback('Save failed: ' + r.error)
+      } else {
+        setFeedback(r.needsRestart ? '⚠ Restart agent to apply' : 'Saved')
+        setTimeout(() => setFeedback(''), 3500)
+        onSave()
+      }
+    } catch { setFeedback('Save failed') }
+    setSaving(false)
+  }
+
+  return (
+    <form className="config-form" onSubmit={handleSubmit}>
+      <div className="form-section-title">Export File</div>
+      <div style={{ fontSize: '.75rem', color: 'var(--text-3)', marginBottom: '.75rem', lineHeight: 1.5 }}>
+        {hint}
+      </div>
+      <div className="form-row">
+        <label>File path</label>
+        <input type="text" value={exportPath} onChange={e => setExportPath(e.target.value)} placeholder={placeholder} />
+      </div>
+      <div className="divider" />
+      <div className="form-section-title">Auto-reimport (optional)</div>
+      <div className="form-row">
+        <label>Watch interval (minutes)</label>
+        <input type="number" value={watchMins} onChange={e => setWatchMins(e.target.value)}
+          placeholder="Leave empty to run once" min="1" />
+      </div>
+      <div className="form-actions">
+        <div><span className={`save-feedback${feedback ? ' visible' : ''}`}>{feedback}</span></div>
         <button type="submit" className="btn btn-save" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
       </div>
     </form>
@@ -352,7 +463,13 @@ function AgentSection({ agent, config, onStart, onStop, onConfigSave }) {
               {agent.id === 'limitless' && config.limitless && (
                 <LimitlessConfigForm config={config.limitless} onSave={onConfigSave} />
               )}
-              {agent.id !== 'email' && agent.id !== 'limitless' && (
+              {agent.id === 'openai' && (
+                <AiImporterConfigForm agentId="openai" config={config} onSave={onConfigSave} />
+              )}
+              {agent.id === 'gemini' && (
+                <AiImporterConfigForm agentId="gemini" config={config} onSave={onConfigSave} />
+              )}
+              {agent.id !== 'email' && agent.id !== 'limitless' && agent.id !== 'openai' && agent.id !== 'gemini' && (
                 <div style={{ color: 'var(--text-3)', fontSize: '.825rem' }}>No configurable options for this agent.</div>
               )}
             </div>

@@ -1,17 +1,8 @@
 'use strict'
 
-const Anthropic = require('@anthropic-ai/sdk')
-
-const MODEL = 'claude-sonnet-4-6'
-
-let client = null
-
-function getClient() {
-  if (!client) {
-    client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY })
-  }
-  return client
-}
+const aiClient = require('../../shared/ai-client')
+const db = require('@secondbrain/db')
+const { extractText } = require('../../shared/docParser')
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -22,7 +13,22 @@ function sleep(ms) {
  */
 function parseJSON(text) {
   const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
-  return JSON.parse(clean)
+  try {
+    return JSON.parse(clean)
+  } catch {
+    // Attempt to recover truncated JSON by closing open structures
+    let s = clean
+    // Close any open string by trimming to last complete key-value
+    s = s.replace(/,\s*"[^"]*$/, '').replace(/,\s*$/, '')
+    // Count open braces/brackets and close them
+    let braces = 0, brackets = 0
+    for (const ch of s) {
+      if (ch === '{') braces++; else if (ch === '}') braces--
+      if (ch === '[') brackets++; else if (ch === ']') brackets--
+    }
+    s += ']'.repeat(Math.max(0, brackets)) + '}'.repeat(Math.max(0, braces))
+    return JSON.parse(s)
+  }
 }
 
 /**
@@ -53,11 +59,39 @@ async function analyzeDirectChatContact(chatId, contactData, messages, existingO
       return `[${who}] (${date}): ${(m.body || '').slice(0, 200)}`
     }).join('\n')
 
+    // Try to extract text from documents
+    const docTexts = []
+    for (const m of messages) {
+      if (m.msg_type === 'document' && m.wa_msg_id) {
+        try {
+          const { rows } = await db.query('SELECT file_path, mime_type FROM public.media_files WHERE wa_msg_id = $1', [m.wa_msg_id])
+          if (rows.length > 0) {
+            const text = await extractText(rows[0].file_path, rows[0].mime_type)
+            if (text) docTexts.push(`[Document: ${m.filename || 'file'}]\n${text}`)
+          }
+        } catch { /* non-fatal */ }
+      }
+    }
+    const docContext = docTexts.length > 0
+      ? `\n\nDocuments shared:\n${docTexts.join('\n---\n').slice(0, 2000)}`
+      : ''
+
     // Include manually-confirmed facts as ground truth
     const overrides = existingOverrides || {}
     const overrideKeys = Object.keys(overrides)
     const overrideContext = overrideKeys.length > 0
       ? `\nUser-confirmed facts (treat as ground truth, do not contradict):\n${overrideKeys.map(k => `- ${k}: ${JSON.stringify(overrides[k].value)}`).join('\n')}\n`
+      : ''
+
+    // Collect image messages for vision analysis (up to 3)
+    const imageMessages = messages.filter(m => {
+      const b = m.body || ''
+      const t = m.msg_type || ''
+      return t === 'image' || (b.startsWith('/9j/') && b.length > 200)
+    }).slice(0, 3)
+
+    const imageNote = imageMessages.length > 0
+      ? `\n\nNote: ${imageMessages.length} image(s) from this conversation are attached for visual context.`
       : ''
 
     const prompt = `You are analyzing a WhatsApp contact from the perspective of the account owner.
@@ -79,7 +113,7 @@ Contact info:
 - Last seen: ${contactData.last_msg_at ? new Date(contactData.last_msg_at).toLocaleDateString() : 'unknown'}
 ${overrideContext}
 Recent messages (newest first):
-${sample || '(no text messages)'}
+${sample || '(no text messages)'}${docContext}${imageNote}
 
 Return ONLY valid JSON:
 {
@@ -97,13 +131,31 @@ Return ONLY valid JSON:
 Set is_noise=true for: bots, spam, automated alerts, OTP services, delivery notifications, bank alerts, unknown contacts with only automated messages.
 relationship_strength=noise means this contact is not meaningful (same as is_noise).`
 
-    const response = await getClient().messages.create({
-      model: MODEL,
+    // Build multi-modal content: include up to 3 images for vision analysis
+    let userContent
+    if (imageMessages.length > 0) {
+      const contentBlocks = []
+      for (const imgMsg of imageMessages) {
+        const b64 = imgMsg.body || ''
+        if (b64.length > 200) {
+          contentBlocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/jpeg', data: b64 }
+          })
+        }
+      }
+      contentBlocks.push({ type: 'text', text: prompt })
+      userContent = contentBlocks
+    } else {
+      userContent = prompt
+    }
+
+    const response = await aiClient.create({
       max_tokens: 600,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user', content: userContent }],
     })
 
-    const text = response.content[0]?.text || ''
+    const text = response.text || ''
     const result = parseJSON(text)
 
     return {
@@ -217,13 +269,12 @@ Definitions:
 
 - is_noise: true only for spam/broadcast/automated groups with no real human conversation`
 
-    const response = await getClient().messages.create({
-      model: MODEL,
-      max_tokens: 1000,
+    const response = await aiClient.create({
+      max_tokens: 2048,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text   = response.content[0]?.text || ''
+    const text   = response.text || ''
     const result = parseJSON(text)
 
     return {
@@ -270,13 +321,12 @@ Return ONLY a JSON array:
 
 Only include real named people. Skip generic terms like "someone", "they", etc.`
 
-    const response = await getClient().messages.create({
-      model: MODEL,
+    const response = await aiClient.create({
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.content[0]?.text || ''
+    const text = response.text || ''
     const result = parseJSON(text)
     return Array.isArray(result) ? result : []
   } catch (err) {
@@ -319,13 +369,12 @@ Return ONLY a JSON array of insights (max 3):
 
 Only return insights that are genuinely actionable. Empty array if nothing notable.`
 
-    const response = await getClient().messages.create({
-      model: MODEL,
+    const response = await aiClient.create({
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.content[0]?.text || ''
+    const text = response.text || ''
     const result = parseJSON(text)
     return Array.isArray(result) ? result : []
   } catch (err) {

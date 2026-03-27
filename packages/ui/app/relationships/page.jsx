@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
 async function apiFetch(method, path, body) {
@@ -48,6 +49,13 @@ function sourceIcon(source) {
   return { email: '📧', whatsapp: '💬', limitless: '🎙️' }[source] || '📌'
 }
 
+function resolveGroupIds(text, groupsMap) {
+  if (!text) return text
+  return text
+    .replace(/(\d{5,})@g\.us/g, (_, id) => (groupsMap && groupsMap[id + '@g.us']) || (groupsMap && groupsMap[id]) || 'WhatsApp group')
+    .replace(/(\d{5,})@c\.us/g, (_, num) => '+' + num)
+}
+
 function insightIcon(type) {
   return {
     awaiting_reply: '💬',
@@ -82,8 +90,18 @@ function CommContent({ comm }) {
         <img className="comm-media-thumb"
           src={`data:image/jpeg;base64,${meta.thumbnail_b64}`}
           alt={msgType || 'media'}
-          onClick={() => window.__openLightbox?.(`data:image/jpeg;base64,${meta.thumbnail_b64}`)}
+          onClick={() => {
+            const src = meta.wa_msg_id
+              ? `/api/media/wa/${encodeURIComponent(meta.wa_msg_id)}`
+              : `data:image/jpeg;base64,${meta.thumbnail_b64}`
+            window.__openLightbox?.(src)
+          }}
         />
+        {meta.msg_type === 'document' && meta.wa_msg_id && (
+          <a href={`/api/media/wa/${encodeURIComponent(meta.wa_msg_id)}`} target="_blank" rel="noreferrer">
+            Download {meta.filename || 'document'}
+          </a>
+        )}
       </>
     )
   }
@@ -150,10 +168,14 @@ function TagEditor({ tags, onChange }) {
 }
 
 export default function RelationshipsPage() {
+  const searchParams = useSearchParams()
+  const autoSelectedRef = useRef(false)
+
   const [contacts, setContacts] = useState([])
   const [selectedContactId, setSelectedContactId] = useState(null)
   const [selectedContact, setSelectedContact] = useState(null)
   const [insights, setInsights] = useState([])
+  const [groupsMap, setGroupsMap] = useState({})
   const [insightFilter, setInsightFilterState] = useState('')
   const [stats, setStats] = useState(null)
   const [search, setSearch] = useState('')
@@ -220,9 +242,25 @@ export default function RelationshipsPage() {
     loadContacts('', '')
     loadInsights('')
     loadStats()
+    fetch('/api/relationships/groups').then(r => r.json()).then(data => {
+      if (Array.isArray(data)) {
+        const map = {}
+        for (const g of data) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
+        setGroupsMap(map)
+      }
+    }).catch(() => {})
     const interval = setInterval(() => { loadStats(); loadInsights(insightFilter) }, 30000)
     return () => clearInterval(interval)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-select contact from URL param ?contact=<id>
+  useEffect(() => {
+    if (autoSelectedRef.current || !contacts.length) return
+    const id = parseInt(searchParams.get('contact'), 10)
+    if (!id) return
+    autoSelectedRef.current = true
+    selectContact(id)
+  }, [contacts]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSearch() {
     clearTimeout(searchDebounce)
@@ -843,12 +881,12 @@ export default function RelationshipsPage() {
                   <div className="insight-card-header">
                     <div className="insight-type-icon">{insightIcon(ins.insight_type)}</div>
                     <div className="insight-card-meta">
-                      <div className="insight-title">{ins.title}</div>
+                      <div className="insight-title">{resolveGroupIds(ins.title, groupsMap)}</div>
                       {ins.contact_name && <div className="insight-contact">{ins.contact_name}</div>}
                     </div>
                     <span className="priority-badge" title={`${ins.priority} priority`}>{priorityIcon(ins.priority)}</span>
                   </div>
-                  {ins.description && <div className="insight-description">{ins.description}</div>}
+                  {ins.description && <div className="insight-description">{resolveGroupIds(ins.description, groupsMap)}</div>}
                   <div className="insight-actions">
                     <button className="insight-btn action" onClick={() => actionInsight(ins.id)}>Done</button>
                     <button className="insight-btn dismiss" onClick={() => dismissInsight(ins.id)}>Dismiss</button>

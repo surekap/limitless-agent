@@ -122,10 +122,35 @@ async function parseEmail(rawSource, uid, flags = []) {
     body_text:     parsed.text  || null,
     body_html:     parsed.html  || null,
     raw_headers,
-    attachments: (parsed.attachments || []).map((a) => ({
-      filename:    a.filename    || null,
-      contentType: a.contentType || null,
-      size:        a.size        || 0,
+    attachments: await Promise.all((parsed.attachments || []).map(async (a) => {
+      const base = {
+        filename:    a.filename    || null,
+        contentType: a.contentType || null,
+        size:        a.size        || 0,
+      }
+
+      // Extract text from PDF/spreadsheet attachments
+      const ct = (a.contentType || '').toLowerCase()
+      const fn = (a.filename || '').toLowerCase()
+      if (a.content && (ct.includes('pdf') || fn.endsWith('.pdf'))) {
+        try {
+          const pdfParse = require('pdf-parse')
+          const data = await pdfParse(a.content)
+          base.extracted_text = (data.text || '').slice(0, 3000)
+        } catch { /* non-fatal */ }
+      } else if (a.content && (ct.includes('spreadsheet') || ct.includes('excel') ||
+                 fn.endsWith('.xlsx') || fn.endsWith('.xls') || fn.endsWith('.csv'))) {
+        try {
+          const XLSX = require('xlsx')
+          const wb = XLSX.read(a.content)
+          const texts = wb.SheetNames.slice(0, 3).map(s => {
+            return `[${s}]\n${XLSX.utils.sheet_to_csv(wb.Sheets[s])}`
+          })
+          base.extracted_text = texts.join('\n\n').slice(0, 3000)
+        } catch { /* non-fatal */ }
+      }
+
+      return base
     })),
     labels:  [],  // populated by caller from X-GM-LABELS
     is_read,

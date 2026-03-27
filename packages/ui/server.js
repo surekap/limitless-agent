@@ -64,6 +64,18 @@ const AGENTS = {
     description: 'Enriches contact profiles via Tavily, OpenAI, PeopleDataLabs, SerpAPI',
     entrypoint:  path.resolve(__dirname, '../agents/research/index.js'),
   },
+  openai: {
+    id:          'openai',
+    name:        'OpenAI Importer',
+    description: 'Imports ChatGPT conversation history from a data export file',
+    entrypoint:  path.resolve(__dirname, '../agents/ai/openai.js'),
+  },
+  gemini: {
+    id:          'gemini',
+    name:        'Gemini Importer',
+    description: 'Imports Google Gemini conversation history from a Google Takeout export',
+    entrypoint:  path.resolve(__dirname, '../agents/ai/gemini.js'),
+  },
 };
 
 // ── Process registry ──────────────────────────────────────────────────────────
@@ -399,6 +411,27 @@ async function researchStats() {
   } catch { return null; }
 }
 
+async function aiStats(provider) {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(*)                                                    AS total_conversations,
+        SUM(message_count)                                          AS total_messages,
+        MAX(imported_at)                                            AS last_import
+      FROM ai.conversations
+      WHERE provider = $1
+    `, [provider]);
+    const { rows: syncRows } = await db.query(`
+      SELECT started_at, status, conversations_imported, messages_imported
+      FROM ai.sync_log
+      WHERE provider = $1
+      ORDER BY started_at DESC LIMIT 1
+    `, [provider]);
+    return { ...rows[0], ...(syncRows[0] || {}) };
+  } catch { return null; }
+}
+
 // ── Config helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -424,11 +457,31 @@ function readGmailAccounts(env) {
 const app = express();
 app.use(express.json());
 
+// ── Media serving ─────────────────────────────────────────────────────────────
+app.get('/api/media/wa/:msgId', async (req, res) => {
+  try {
+    const msgId = decodeURIComponent(req.params.msgId)
+    const { rows } = await db.query(
+      'SELECT file_path, mime_type FROM public.media_files WHERE wa_msg_id = $1',
+      [msgId]
+    )
+    if (!rows.length) return res.status(404).json({ error: 'not found' })
+    const { file_path, mime_type } = rows[0]
+    const fs = require('fs')
+    if (!fs.existsSync(file_path)) return res.status(404).json({ error: 'file not found on disk' })
+    res.setHeader('Content-Type', mime_type || 'application/octet-stream')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    res.sendFile(file_path)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // GET /api/agents
 app.get('/api/agents', async (req, res) => {
-  const [eStats, lStats, rStats, pStats, rsStats] = await Promise.all([
+  const [eStats, lStats, rStats, pStats, oaiStats, gemStats, rsStats] = await Promise.all([
     emailStats(), limitlessStats(), relationshipsStats(), projectsStats(),
-    researchStats(),
+    aiStats('openai'), aiStats('gemini'), researchStats(),
   ]);
   const result = {};
 
@@ -448,6 +501,8 @@ app.get('/api/agents', async (req, res) => {
                  : id === 'limitless'     ? lStats
                  : id === 'relationships' ? rStats
                  : id === 'projects'      ? pStats
+                 : id === 'openai'        ? oaiStats
+                 : id === 'gemini'        ? gemStats
                  : id === 'research'      ? rsStats
                  : null,
     };
@@ -501,7 +556,16 @@ app.get('/api/config', (req, res) => {
       PROCESS_INTERVAL_CRON:    env.PROCESS_INTERVAL_CRON    || '*/1 * * * *',
       FETCH_DAYS:               env.FETCH_DAYS               || '1',
       PROCESSING_BATCH_SIZE:    env.PROCESSING_BATCH_SIZE    || '15',
+      AI_PROVIDER:           env.AI_PROVIDER           || 'anthropic',
+      ANTHROPIC_API_KEY:     env.ANTHROPIC_API_KEY     || '',
+      OPENAI_API_KEY:        env.OPENAI_API_KEY        || '',
+      AI_ANTHROPIC_MODEL:    env.AI_ANTHROPIC_MODEL    || '',
+      AI_OPENAI_MODEL:       env.AI_OPENAI_MODEL       || '',
+      AI_CLAUDE_CLI_MODEL:   env.AI_CLAUDE_CLI_MODEL   || '',
     },
+    OPENAI_EXPORT_PATH:           env.OPENAI_EXPORT_PATH           || '',
+    GEMINI_EXPORT_PATH:           env.GEMINI_EXPORT_PATH           || '',
+    AI_WATCH_INTERVAL_MINUTES:    env.AI_WATCH_INTERVAL_MINUTES    || '',
   });
 });
 
@@ -535,10 +599,22 @@ app.post('/api/config', (req, res) => {
 
     if (agent === 'limitless') {
       const keys = ['LIMITLESS_API_KEY', 'FETCH_INTERVAL_CRON', 'PROCESS_INTERVAL_CRON',
-                    'FETCH_DAYS', 'PROCESSING_BATCH_SIZE'];
+                    'FETCH_DAYS', 'PROCESSING_BATCH_SIZE', 'AI_PROVIDER',
+                    'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+                    'AI_ANTHROPIC_MODEL', 'AI_OPENAI_MODEL', 'AI_CLAUDE_CLI_MODEL'];
       for (const k of keys) {
         if (updates[k] != null) envUpdates[k] = updates[k];
       }
+    }
+
+    if (agent === 'openai') {
+      if (updates.OPENAI_EXPORT_PATH        != null) envUpdates.OPENAI_EXPORT_PATH        = updates.OPENAI_EXPORT_PATH;
+      if (updates.AI_WATCH_INTERVAL_MINUTES != null) envUpdates.AI_WATCH_INTERVAL_MINUTES = updates.AI_WATCH_INTERVAL_MINUTES;
+    }
+
+    if (agent === 'gemini') {
+      if (updates.GEMINI_EXPORT_PATH        != null) envUpdates.GEMINI_EXPORT_PATH        = updates.GEMINI_EXPORT_PATH;
+      if (updates.AI_WATCH_INTERVAL_MINUTES != null) envUpdates.AI_WATCH_INTERVAL_MINUTES = updates.AI_WATCH_INTERVAL_MINUTES;
     }
 
     writeEnv(envUpdates);
@@ -788,7 +864,7 @@ app.post('/api/relationships/contacts/:id/reanalyze', async (req, res) => {
     let emailSnippets = [];
     if ((contact.emails || []).length) {
       const { rows: emails } = await db.query(`
-        SELECT subject, date, body_text FROM email.emails
+        SELECT subject, date, body_text, attachments FROM email.emails
         WHERE from_address ILIKE $1
         ORDER BY date DESC LIMIT 10
       `, [`%${contact.emails[0]}%`]);
@@ -801,9 +877,14 @@ app.post('/api/relationships/contacts/:id/reanalyze', async (req, res) => {
     const msgSample = messages.slice(0,20).map(m =>
       `[${m.from_me ? 'Me' : displayName}] (${m.ts ? new Date(m.ts).toLocaleDateString() : ''}): ${(m.body||'').slice(0,200)}`
     ).join('\n');
-    const emailSample = emailSnippets.slice(0,5).map(e =>
-      `Subject: ${e.subject || '(none)'} | ${(e.body_text||'').slice(0,150)}`
-    ).join('\n');
+    const emailSample = emailSnippets.slice(0,5).map(e => {
+      let line = `Subject: ${e.subject || '(none)'} | ${(e.body_text||'').slice(0,150)}`;
+      // Include any extracted attachment text
+      const attachments = Array.isArray(e.attachments) ? e.attachments : (e.attachments ? JSON.parse(e.attachments) : []);
+      const attachTexts = attachments.filter(a => a.extracted_text).map(a => `[Attachment: ${a.filename || 'file'}] ${a.extracted_text.slice(0,200)}`);
+      if (attachTexts.length) line += '\n' + attachTexts.join('\n');
+      return line;
+    }).join('\n');
 
     // Build override context so Claude treats manually-confirmed facts as ground truth
     const overrides = contact.manual_overrides || {};
@@ -1238,7 +1319,7 @@ app.get('/api/search', async (req, res) => {
   if (!db)          return res.status(503).json({ error: 'No database' });
 
   try {
-    const vec = await embed(q);
+    const vec = await embed(q, 'RETRIEVAL_QUERY');
 
     let sourceClause = '';
     const params = [toSql(vec), limit];

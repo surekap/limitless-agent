@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS search.embeddings (
   source      TEXT NOT NULL,   -- 'email' | 'whatsapp' | 'lifelog' | 'contact' | 'insight' | 'project' | 'project_insight'
   source_id   TEXT NOT NULL,   -- primary key from the source table
   content     TEXT NOT NULL,   -- the text that was embedded
-  embedding   vector(384),     -- all-MiniLM-L6-v2
+  embedding   vector(3072),    -- gemini-embedding-2-preview (3072 dims)
   metadata    JSONB DEFAULT '{}',
   indexed_at  TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (source, source_id)

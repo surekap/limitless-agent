@@ -12,9 +12,17 @@ CREATE TABLE IF NOT EXISTS lifelogs (
   contents TEXT,
   markdown TEXT,
   processed BOOLEAN DEFAULT FALSE,
+  processing_error TEXT,
+  processing_attempts INT NOT NULL DEFAULT 0,
+  last_attempt_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add retry-tracking columns to existing installations
+ALTER TABLE lifelogs ADD COLUMN IF NOT EXISTS processing_error TEXT;
+ALTER TABLE lifelogs ADD COLUMN IF NOT EXISTS processing_attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE lifelogs ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_lifelogs_processed ON lifelogs(processed);
 CREATE INDEX IF NOT EXISTS idx_lifelogs_start_time ON lifelogs(start_time);

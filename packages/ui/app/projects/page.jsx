@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
 async function apiFetch(method, path, body) {
@@ -71,6 +72,9 @@ function TagEditor({ tags, onChange }) {
 }
 
 export default function ProjectsPage() {
+  const searchParams = useSearchParams()
+  const autoSelectedRef = useRef(false)
+
   const [projects, setProjects] = useState([])
   const [filteredProjects, setFilteredProjects] = useState([])
   const [selectedProjectId, setSelectedProjectId] = useState(null)
@@ -153,6 +157,15 @@ export default function ProjectsPage() {
     }, 60000)
     return () => clearInterval(interval)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-select project from URL param ?project=<id>
+  useEffect(() => {
+    if (autoSelectedRef.current || !projects.length) return
+    const id = parseInt(searchParams.get('project'), 10)
+    if (!id) return
+    autoSelectedRef.current = true
+    selectProject(id)
+  }, [projects]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     applyFilters(projects, searchQuery, statusFilter)

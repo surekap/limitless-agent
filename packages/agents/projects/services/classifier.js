@@ -1,18 +1,7 @@
 'use strict'
 
-const Anthropic = require('@anthropic-ai/sdk')
-const db        = require('@secondbrain/db')
-
-const MODEL = 'claude-sonnet-4-6'
-
-let client = null
-
-function getClient() {
-  if (!client) {
-    client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY })
-  }
-  return client
-}
+const aiClient = require('../../shared/ai-client')
+const db       = require('@secondbrain/db')
 
 function parseJSON(text) {
   const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
@@ -59,13 +48,12 @@ Be conservative — only assign if clearly related. relevance > 0.7 = strong mat
 Return ONLY the JSON array, no explanation.`
 
   try {
-    const response = await getClient().messages.create({
-      model: MODEL,
-      max_tokens: 2048,
+    const response = await aiClient.create({
       messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2048,
     })
 
-    const text = response.content[0]?.text || ''
+    const text = response.text || ''
     const result = parseJSON(text)
     if (!Array.isArray(result)) return []
 

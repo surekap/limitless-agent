@@ -1,18 +1,7 @@
 'use strict'
 
-const Anthropic = require('@anthropic-ai/sdk')
+const aiClient = require('../../shared/ai-client')
 const db        = require('@secondbrain/db')
-
-const MODEL = 'claude-sonnet-4-6'
-
-let client = null
-
-function getClient() {
-  if (!client) {
-    client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY })
-  }
-  return client
-}
 
 function parseJSON(text) {
   const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
@@ -30,7 +19,7 @@ function sleep(ms) {
 async function analyzeProject(project, communications) {
   if (!project) return
 
-  const commList = communications.slice(0, 30).map(c => {
+  const commList = communications.slice(0, 50).map(c => {
     const date = c.occurred_at ? new Date(c.occurred_at).toLocaleDateString() : 'unknown'
     const source = c.source === 'email' ? '📧' : c.source === 'whatsapp' ? '💬' : '🎙'
     const subject = c.subject ? ` [${c.subject}]` : ''
@@ -44,7 +33,7 @@ async function analyzeProject(project, communications) {
     ? `\nUser-confirmed facts (treat as ground truth, do not contradict):\n${overrideKeys.map(k => `- ${k}: ${JSON.stringify(overrides[k].value)}`).join('\n')}\n`
     : ''
 
-  const prompt = `Analyze this project and provide a status report.
+  const prompt = `You are analyzing a project from this person's communications. Be specific — name actual people, companies, amounts, and dates from the communications. Do not use vague language.
 
 Project: ${project.name}${project.description ? ` — ${project.description}` : ''}
 ${overrideContext}Communications (newest first):
@@ -54,23 +43,29 @@ Return JSON:
 {
   "status": "active|stalled|completed|on_hold|unknown",
   "health": "on_track|at_risk|blocked|unknown",
-  "ai_summary": "2-3 sentence current status summary",
-  "next_action": "Most important next step (one sentence)",
+  "ai_summary": "2-3 sentence summary naming specific developments, people, or decisions from the communications",
+  "next_action": "Specific next step — name actual people/entities and what they need to do",
   "insights": [
-    {"insight_type": "status|next_action|risk|opportunity|blocker|decision", "content": "...", "priority": "high|medium|low"}
+    {"insight_type": "opportunity|risk|blocker|decision|next_action|status", "content": "Specific insight naming entities, amounts, or dates from the communications", "priority": "high|medium|low"}
   ]
 }
 
-Focus on what's actionable. Identify risks and blockers. Be direct. Max 5 insights.`
+Rules:
+- "on_track" = active progress with no blockers. "at_risk" = delays, unresolved issues, or inaction despite active topic. "blocked" = something actively preventing progress.
+- insight_type guide: "opportunity" = actionable upside or deal to pursue, "risk" = something that could go wrong, "blocker" = preventing progress now, "decision" = a choice pending, "next_action" = concrete step needed, "status" = current state
+- For investment/financial projects: name the specific companies, funds, or deals discussed; include amounts if mentioned; note whether follow-up has occurred
+- For operational projects: name the specific system, vendor, or person causing the issue
+- Prioritize "high" only for time-sensitive or high financial/operational impact items
+- Generate 3-5 insights. Specific always beats generic.
+- If there are no communications, set health=unknown, status=unknown, ai_summary to null, insights to []`
 
   try {
-    const response = await getClient().messages.create({
-      model: MODEL,
-      max_tokens: 1200,
+    const response = await aiClient.create({
+      max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.content[0]?.text || ''
+    const text = response.text || ''
     const result = parseJSON(text)
 
     // Update project — skip any fields the user has manually overridden
@@ -126,7 +121,7 @@ Focus on what's actionable. Identify risks and blockers. Be direct. Max 5 insigh
  * Load recent communications for a project from DB.
  */
 async function getProjectCommunications(projectId, limit) {
-  limit = limit || 30
+  limit = limit || 50
   try {
     const { rows } = await db.query(`
       SELECT source, source_id, content_snippet, subject, occurred_at, relevance_score

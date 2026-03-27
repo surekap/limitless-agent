@@ -2,7 +2,7 @@
 
 /**
  * Background indexer — runs periodically, finds unembedded content from all sources,
- * generates embeddings via all-MiniLM-L6-v2, and upserts into search.embeddings.
+ * generates embeddings via Gemini Embedding API, and upserts into search.embeddings.
  *
  * Sources:
  *   email          → email.emails
@@ -14,37 +14,72 @@
  *   project_insight→ projects.project_insights
  */
 
-const { embed, toSql } = require('./embedder');
+const { embedBatch, toSql } = require('./embedder');
 
-const BATCH = 30;   // rows per source per run
 const INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 let _db  = null;
 let _tid = null;
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Status tracking ───────────────────────────────────────────────────────────
 
-async function upsert(source, sourceId, content, embedding, metadata) {
-  await _db.query(`
-    INSERT INTO search.embeddings (source, source_id, content, embedding, metadata)
-    VALUES ($1, $2, $3, $4::public.vector, $5)
-    ON CONFLICT (source, source_id) DO UPDATE
-      SET content = EXCLUDED.content,
-          embedding = EXCLUDED.embedding,
-          metadata = EXCLUDED.metadata,
-          indexed_at = NOW()
-  `, [source, String(sourceId), content.slice(0, 2000), toSql(embedding), JSON.stringify(metadata)]);
+const _status = {
+  running:      false,
+  lastRunAt:    null,
+  lastRunCount: null,
+  nextRunAt:    null,
+  startedAt:    null,
+};
+
+function getStatus() {
+  return {
+    running:      _status.running,
+    lastRunAt:    _status.lastRunAt?.toISOString() ?? null,
+    lastRunCount: _status.lastRunCount,
+    nextRunAt:    _status.nextRunAt?.toISOString() ?? null,
+    startedAt:    _status.startedAt?.toISOString() ?? null,
+    intervalMs:   INTERVAL_MS,
+  };
 }
 
-function truncate(str, n = 800) {
-  if (!str) return '';
-  return str.length > n ? str.slice(0, n) + '…' : str;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch all unindexed rows, embed them in one batch call, then upsert.
+ * rows:       array of DB rows
+ * toContent:  row → string to embed
+ * toSourceId: row → string source_id
+ * toMeta:     row → metadata object
+ * source:     string source name
+ */
+async function indexSource(source, rows, toContent, toSourceId, toMeta) {
+  if (!rows.length) return 0;
+
+  const contents  = rows.map(r => toContent(r).slice(0, 2000));
+  const nonEmpty  = contents.map((c, i) => ({ i, c, row: rows[i] })).filter(x => x.c.trim());
+  if (!nonEmpty.length) return 0;
+
+  const vecs = await embedBatch(nonEmpty.map(x => x.c));
+
+  for (let j = 0; j < nonEmpty.length; j++) {
+    const { c, row } = nonEmpty[j];
+    await _db.query(`
+      INSERT INTO search.embeddings (source, source_id, content, embedding, metadata)
+      VALUES ($1, $2, $3, $4::public.vector, $5)
+      ON CONFLICT (source, source_id) DO UPDATE
+        SET content    = EXCLUDED.content,
+            embedding  = EXCLUDED.embedding,
+            metadata   = EXCLUDED.metadata,
+            indexed_at = NOW()
+    `, [source, String(toSourceId(row)), c, toSql(vecs[j]), JSON.stringify(toMeta(row))]);
+  }
+
+  return nonEmpty.length;
 }
 
 // ── Source indexers ───────────────────────────────────────────────────────────
 
 async function indexEmails() {
-  let count = 0;
   try {
     const { rows } = await _db.query(`
       SELECT e.id, e.subject, e.from_address, e.date,
@@ -55,28 +90,19 @@ async function indexEmails() {
         WHERE s.source = 'email' AND s.source_id = e.id::text
       )
       ORDER BY e.date DESC
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      const content = [row.subject, row.body].filter(Boolean).join('\n');
-      if (!content.trim()) continue;
-      const vec = await embed(content);
-      await upsert('email', row.id, content, vec, {
-        subject:      row.subject,
-        from_address: row.from_address,
-        date:         row.date,
-      });
-      count++;
-    }
+    `);
+    return indexSource('email', rows,
+      r => [r.subject, r.body].filter(Boolean).join('\n'),
+      r => r.id,
+      r => ({ subject: r.subject, from_address: r.from_address, date: r.date }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] email:', e.message);
+    return 0;
   }
-  return count;
 }
 
 async function indexLifelogs() {
-  let count = 0;
   try {
     const { rows } = await _db.query(`
       SELECT l.id, l.title, l.start_time,
@@ -87,29 +113,20 @@ async function indexLifelogs() {
         WHERE s.source = 'lifelog' AND s.source_id = l.id::text
       )
       ORDER BY l.start_time DESC NULLS LAST
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      const content = [row.title, row.body].filter(Boolean).join('\n');
-      if (!content.trim()) continue;
-      const vec = await embed(content);
-      await upsert('lifelog', row.id, content, vec, {
-        title:      row.title,
-        start_time: row.start_time,
-      });
-      count++;
-    }
+    `);
+    return indexSource('lifelog', rows,
+      r => [r.title, r.body].filter(Boolean).join('\n'),
+      r => r.id,
+      r => ({ title: r.title, start_time: r.start_time }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] lifelog:', e.message);
+    return 0;
   }
-  return count;
 }
 
 async function indexWhatsApp() {
-  let count = 0;
   try {
-    // Use chat_id + epoch-ms as a stable composite key
     const { rows } = await _db.query(`
       SELECT
         chat_id,
@@ -129,29 +146,19 @@ async function indexWhatsApp() {
             AND s.source_id = chat_id || '::' || EXTRACT(EPOCH FROM ts)::bigint::text
         )
       ORDER BY ts DESC
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      const sourceId = `${row.chat_id}::${row.epoch}`;
-      const content  = row.body.trim();
-      const vec = await embed(content);
-      await upsert('whatsapp', sourceId, content, vec, {
-        chat_id:     row.chat_id,
-        from_me:     row.from_me,
-        notify_name: row.notify_name,
-        ts:          row.ts,
-      });
-      count++;
-    }
+    `);
+    return indexSource('whatsapp', rows,
+      r => r.body.trim(),
+      r => `${r.chat_id}::${r.epoch}`,
+      r => ({ chat_id: r.chat_id, from_me: r.from_me, notify_name: r.notify_name, ts: r.ts }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] whatsapp:', e.message);
+    return 0;
   }
-  return count;
 }
 
 async function indexContacts() {
-  let count = 0;
   try {
     const { rows } = await _db.query(`
       SELECT c.id, c.display_name, c.company, c.job_title,
@@ -162,32 +169,23 @@ async function indexContacts() {
           SELECT 1 FROM search.embeddings s
           WHERE s.source = 'contact' AND s.source_id = c.id::text
         )
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      const content = [
-        row.display_name,
-        row.company && row.job_title ? `${row.job_title} at ${row.company}` : (row.company || row.job_title),
-        row.summary,
-      ].filter(Boolean).join('\n');
-      if (!content.trim()) continue;
-      const vec = await embed(content);
-      await upsert('contact', row.id, content, vec, {
-        display_name:      row.display_name,
-        company:           row.company,
-        relationship_type: row.relationship_type,
-      });
-      count++;
-    }
+    `);
+    return indexSource('contact', rows,
+      r => [
+        r.display_name,
+        r.company && r.job_title ? `${r.job_title} at ${r.company}` : (r.company || r.job_title),
+        r.summary,
+      ].filter(Boolean).join('\n'),
+      r => r.id,
+      r => ({ display_name: r.display_name, company: r.company, relationship_type: r.relationship_type }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] contacts:', e.message);
+    return 0;
   }
-  return count;
 }
 
 async function indexInsights() {
-  let count = 0;
   try {
     const { rows } = await _db.query(`
       SELECT i.id, i.insight_type, i.title, i.description,
@@ -199,63 +197,42 @@ async function indexInsights() {
         SELECT 1 FROM search.embeddings s
         WHERE s.source = 'insight' AND s.source_id = i.id::text
       )
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      const content = [row.title, row.description].filter(Boolean).join('\n');
-      if (!content.trim()) continue;
-      const vec = await embed(content);
-      await upsert('insight', row.id, content, vec, {
-        title:        row.title,
-        insight_type: row.insight_type,
-        priority:     row.priority,
-        contact_name: row.contact_name,
-        created_at:   row.created_at,
-      });
-      count++;
-    }
+    `);
+    return indexSource('insight', rows,
+      r => [r.title, r.description].filter(Boolean).join('\n'),
+      r => r.id,
+      r => ({ title: r.title, insight_type: r.insight_type, priority: r.priority, contact_name: r.contact_name, created_at: r.created_at }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] insights:', e.message);
+    return 0;
   }
-  return count;
 }
 
 async function indexProjects() {
-  let count = 0;
   try {
     const { rows } = await _db.query(`
       SELECT p.id, p.name, p.description, p.status, p.health,
-             p.ai_summary, p.last_activity_at
+             LEFT(p.ai_summary, 500) AS ai_summary, p.last_activity_at
       FROM projects.projects p
       WHERE NOT p.is_archived
         AND NOT EXISTS (
           SELECT 1 FROM search.embeddings s
           WHERE s.source = 'project' AND s.source_id = p.id::text
         )
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      const content = [row.name, row.description, truncate(row.ai_summary, 500)].filter(Boolean).join('\n');
-      if (!content.trim()) continue;
-      const vec = await embed(content);
-      await upsert('project', row.id, content, vec, {
-        name:             row.name,
-        status:           row.status,
-        health:           row.health,
-        last_activity_at: row.last_activity_at,
-      });
-      count++;
-    }
+    `);
+    return indexSource('project', rows,
+      r => [r.name, r.description, r.ai_summary].filter(Boolean).join('\n'),
+      r => r.id,
+      r => ({ name: r.name, status: r.status, health: r.health, last_activity_at: r.last_activity_at }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] projects:', e.message);
+    return 0;
   }
-  return count;
 }
 
 async function indexProjectInsights() {
-  let count = 0;
   try {
     const { rows } = await _db.query(`
       SELECT pi.id, pi.insight_type, pi.content, pi.priority, pi.created_at,
@@ -267,63 +244,41 @@ async function indexProjectInsights() {
           SELECT 1 FROM search.embeddings s
           WHERE s.source = 'project_insight' AND s.source_id = pi.id::text
         )
-      LIMIT $1
-    `, [BATCH]);
-
-    for (const row of rows) {
-      if (!row.content?.trim()) continue;
-      const vec = await embed(row.content);
-      await upsert('project_insight', row.id, row.content, vec, {
-        insight_type:  row.insight_type,
-        priority:      row.priority,
-        project_name:  row.project_name,
-        created_at:    row.created_at,
-      });
-      count++;
-    }
+    `);
+    return indexSource('project_insight', rows,
+      r => r.content || '',
+      r => r.id,
+      r => ({ insight_type: r.insight_type, priority: r.priority, project_name: r.project_name, created_at: r.created_at }),
+    );
   } catch (e) {
     if (!e.message.includes('does not exist')) console.warn('[indexer] project_insights:', e.message);
+    return 0;
   }
-  return count;
-}
-
-// ── Status tracking ───────────────────────────────────────────────────────────
-
-const _status = {
-  running:      false,
-  lastRunAt:    null,   // Date
-  lastRunCount: null,   // number of items indexed in last run (null = never run)
-  nextRunAt:    null,   // Date
-  startedAt:    null,   // Date server started indexer
-};
-
-function getStatus() {
-  return {
-    running:      _status.running,
-    lastRunAt:    _status.lastRunAt?.toISOString() ?? null,
-    lastRunCount: _status.lastRunCount,
-    nextRunAt:    _status.nextRunAt?.toISOString() ?? null,
-    startedAt:    _status.startedAt?.toISOString() ?? null,
-    intervalMs:   INTERVAL_MS,
-  };
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function runOnce() {
-  if (_status.running) return;   // prevent overlapping runs
+  if (_status.running) return;
   _status.running = true;
+
   const jobs = [
     indexEmails, indexLifelogs, indexWhatsApp,
     indexContacts, indexInsights, indexProjects, indexProjectInsights,
   ];
   let total = 0;
-  for (const job of jobs) {
-    total += await job();
+  try {
+    for (const job of jobs) {
+      total += await job();
+    }
+  } catch (err) {
+    console.warn(`[indexer] Run failed:`, err.message);
   }
+
   _status.running      = false;
   _status.lastRunAt    = new Date();
   _status.lastRunCount = total;
+
   if (total > 0) console.log(`[indexer] Indexed ${total} new items`);
   else           console.log(`[indexer] Run complete — nothing new to index`);
 }
@@ -333,7 +288,6 @@ function start(db) {
   _db = db;
   _status.startedAt = new Date();
 
-  // Run after a short delay so the server finishes booting first
   setTimeout(async () => {
     await runOnce();
     _status.nextRunAt = new Date(Date.now() + INTERVAL_MS);
@@ -344,7 +298,7 @@ function start(db) {
   }, 15_000);
 
   _status.nextRunAt = new Date(Date.now() + 15_000);
-  console.log('[indexer] Started (runs every 10 min; first pass in 15 s)');
+  console.log(`[indexer] Started with ${process.env.EMBEDDING_MODEL || 'gemini-embedding-2-preview'} (runs every 10 min; first pass in 15 s)`);
 }
 
 function stop() {

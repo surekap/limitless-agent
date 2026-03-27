@@ -1,15 +1,11 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env.local") });
-const Anthropic = require("@anthropic-ai/sdk");
 const { Pool } = require("pg");
 const fs = require("fs");
 const path = require("path");
+const aiClient = require("../shared/ai-client");
 
 class LifelogAgent {
   constructor() {
-    this.anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
-
     this.db = new Pool({ connectionString: process.env.DATABASE_URL });
 
     this.initDatabase();
@@ -140,75 +136,7 @@ class LifelogAgent {
         tool.getToolDefinitions()
       );
 
-      const messages = [{ role: "user", content: prompt }];
-      let maxTurns = 5;
-      let turnCount = 0;
-
-      while (turnCount < maxTurns) {
-        turnCount++;
-        console.log(`🔄 Turn ${turnCount}: Asking Claude...`);
-
-        const response = await this.anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4000,
-          system: systemPrompt,
-          messages: messages,
-          tools: toolDefinitions,
-        });
-
-        console.log(
-          `🧠 Claude response: ${response.content.length} content blocks`
-        );
-
-        let hasToolCalls = false;
-        const toolResults = [];
-
-        for (const contentBlock of response.content) {
-          if (contentBlock.type === "tool_use") {
-            console.log(`📞 Tool call found: ${contentBlock.name}`);
-            hasToolCalls = true;
-
-            const result = await this.executeTool(
-              contentBlock.name,
-              contentBlock.input
-            );
-            toolResults.push({
-              tool_use_id: contentBlock.id,
-              type: "tool_result",
-              content: JSON.stringify(result),
-            });
-          } else if (contentBlock.type === "text") {
-            console.log(
-              `💭 Claude text: ${contentBlock.text.substring(0, 100)}...`
-            );
-          }
-        }
-
-        messages.push({ role: "assistant", content: response.content });
-
-        if (hasToolCalls) {
-          messages.push({
-            role: "user",
-            content: toolResults.concat([
-              {
-                type: "text",
-                text: 'Continue with any remaining actions needed to complete the user\'s requests. If all requests are fully completed, respond with "WORKFLOW_COMPLETE".',
-              },
-            ]),
-          });
-        } else {
-          const lastResponse =
-            response.content.find((block) => block.type === "text")?.text || "";
-          if (
-            lastResponse.includes("WORKFLOW_COMPLETE") ||
-            (!lastResponse.toLowerCase().includes("next") &&
-              !lastResponse.toLowerCase().includes("continue"))
-          ) {
-            console.log("✅ Claude indicates workflow is complete");
-            break;
-          }
-        }
-      }
+      await this._runAI(systemPrompt, prompt, toolDefinitions);
 
       await this.markLifelogProcessed(lifelog.id);
       console.log(`✅ Completed processing lifelog: ${lifelog.id}`);
@@ -217,6 +145,55 @@ class LifelogAgent {
         `❌ Error processing lifelog ${lifelog.id}:`,
         error.message
       );
+      await this.markLifelogFailed(lifelog.id, error.message);
+    }
+  }
+
+  async _runAI(systemPrompt, prompt, toolDefinitions) {
+    const messages = [{ role: "user", content: prompt }];
+    let maxTurns = 5;
+    let turnCount = 0;
+
+    while (turnCount < maxTurns) {
+      turnCount++;
+      console.log(`🔄 Turn ${turnCount}: Calling AI...`);
+
+      const response = await aiClient.create({
+        system: systemPrompt,
+        messages,
+        tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+        max_tokens: 4000,
+      });
+
+      console.log(`🧠 AI response (${response.provider}): stop_reason=${response.stop_reason}, tool_calls=${response.tool_calls.length}`);
+
+      const hasToolCalls = response.tool_calls.length > 0;
+
+      // Build assistant message in normalized format
+      const assistantMsg = {
+        role: "assistant",
+        content: response.text || null,
+        tool_calls: response.tool_calls,
+      };
+      messages.push(assistantMsg);
+
+      if (hasToolCalls) {
+        for (const tc of response.tool_calls) {
+          console.log(`📞 Tool call found: ${tc.name}`);
+          const result = await this.executeTool(tc.name, tc.input);
+          messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(result) });
+        }
+        messages.push({
+          role: "user",
+          content: 'Continue with any remaining actions needed to complete the user\'s requests. If all requests are fully completed, respond with "WORKFLOW_COMPLETE".',
+        });
+      } else {
+        const lastText = response.text || "";
+        if (lastText.includes("WORKFLOW_COMPLETE") || (!lastText.toLowerCase().includes("next") && !lastText.toLowerCase().includes("continue"))) {
+          console.log("✅ AI indicates workflow is complete");
+          break;
+        }
+      }
     }
   }
 
@@ -261,19 +238,36 @@ class LifelogAgent {
   }
 
   async getUnprocessedLifelogs(limit = 10) {
+    // Fetch unprocessed lifelogs, including previously failed ones (up to 3 attempts)
     const { rows } = await this.db.query(
-      "SELECT * FROM lifelogs WHERE processed = FALSE ORDER BY start_time DESC LIMIT $1",
+      `SELECT * FROM lifelogs
+       WHERE processed = FALSE
+         AND (processing_attempts IS NULL OR processing_attempts < 3)
+       ORDER BY
+         CASE WHEN processing_error IS NULL THEN 0 ELSE 1 END,  -- fresh first, retries last
+         start_time DESC
+       LIMIT $1`,
       [limit]
     );
     return rows;
   }
 
   async markLifelogProcessed(lifelogId) {
-    const result = await this.db.query(
-      "UPDATE lifelogs SET processed = TRUE WHERE id = $1",
+    await this.db.query(
+      "UPDATE lifelogs SET processed = TRUE, processing_error = NULL, last_attempt_at = NOW() WHERE id = $1",
       [lifelogId]
     );
-    return result;
+  }
+
+  async markLifelogFailed(lifelogId, errorMsg) {
+    await this.db.query(
+      `UPDATE lifelogs
+       SET processing_error = $2,
+           processing_attempts = COALESCE(processing_attempts, 0) + 1,
+           last_attempt_at = NOW()
+       WHERE id = $1`,
+      [lifelogId, errorMsg]
+    );
   }
 
   async initDatabase() {
@@ -360,5 +354,6 @@ if (require.main === module) {
 
   agent.processBatch();
 
-  console.log("🤖 Lifelog Agent started - processing every 30 seconds");
+  const provider = process.env.AI_PROVIDER || 'anthropic';
+  console.log(`🤖 Lifelog Agent started - processing every 30 seconds (provider: ${provider})`);
 }

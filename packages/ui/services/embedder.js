@@ -1,46 +1,52 @@
 'use strict';
 
-const path = require('path');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Lazily initialized pipeline — first call downloads ~25 MB model to .model-cache/
-let _pipe = null;
-let _loading = null;
+const MODEL = process.env.EMBEDDING_MODEL || 'gemini-embedding-2-preview';
+const DIMS  = 3072;
 
-async function getPipeline() {
-  if (_pipe) return _pipe;
-  if (_loading) return _loading;
+let _client = null;
 
-  _loading = (async () => {
-    const { pipeline, env } = await import('@xenova/transformers');
-    env.cacheDir = path.resolve(__dirname, '../../../.model-cache');
-    env.allowLocalModels = true;
-    console.log('[embedder] Loading all-MiniLM-L6-v2 (downloads on first run)…');
-    _pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
-    console.log('[embedder] Model ready');
-    return _pipe;
-  })();
+function getClient() {
+  if (_client) return _client;
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY is not set');
+  _client = new GoogleGenerativeAI(key);
+  return _client;
+}
 
-  return _loading;
+function getModel() {
+  return getClient().getGenerativeModel({ model: MODEL });
 }
 
 /**
- * Generate a 384-dimensional embedding for `text`.
- * Returns a plain JS number array.
+ * Generate a single embedding.
+ * taskType: 'RETRIEVAL_DOCUMENT' (indexing) | 'RETRIEVAL_QUERY' (searching)
  */
-async function embed(text) {
-  const pipe = await getPipeline();
-  const out  = await pipe(text.slice(0, 2000), { pooling: 'mean', normalize: true });
-  return Array.from(out.data);
+async function embed(text, taskType = 'RETRIEVAL_DOCUMENT') {
+  const result = await getModel().embedContent({
+    content:  { parts: [{ text: text.slice(0, 8000) }], role: 'user' },
+    taskType,
+  });
+  return result.embedding.values;
 }
 
 /**
- * Embed multiple texts in series (the model isn't thread-safe across concurrent calls).
- * Returns array of embedding arrays in the same order.
+ * Embed multiple texts in batches of 100 (Gemini API limit per request).
+ * Much faster than calling embed() in a loop — one round trip per 100 texts.
  */
-async function embedBatch(texts) {
+async function embedBatch(texts, taskType = 'RETRIEVAL_DOCUMENT') {
+  const CHUNK   = 100;
   const results = [];
-  for (const t of texts) {
-    results.push(await embed(t));
+  for (let i = 0; i < texts.length; i += CHUNK) {
+    const slice = texts.slice(i, i + CHUNK);
+    const { embeddings } = await getModel().batchEmbedContents({
+      requests: slice.map(text => ({
+        content:  { parts: [{ text: text.slice(0, 8000) }], role: 'user' },
+        taskType,
+      })),
+    });
+    results.push(...embeddings.map(e => e.values));
   }
   return results;
 }
@@ -52,4 +58,4 @@ function toSql(vec) {
   return '[' + vec.join(',') + ']';
 }
 
-module.exports = { embed, embedBatch, toSql };
+module.exports = { embed, embedBatch, toSql, DIMS, MODEL };
