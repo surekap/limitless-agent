@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WA Connector Admin</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>WhatsApp Connector</h1>
+    <nav>
+      <button class="tab-btn active" data-tab="subscribers">Subscribers</button>
+      <button class="tab-btn" data-tab="messages">Messages</button>
+      <button class="tab-btn" data-tab="status">Status</button>
+    </nav>
+    <div id="wa-state" class="wa-badge">● Loading…</div>
+  </header>
+
+  <!-- ── SUBSCRIBERS TAB ──────────────────────────────────────────────────── -->
+  <section id="tab-subscribers" class="tab active">
+    <div class="toolbar">
+      <h2>Subscribers</h2>
+      <button id="btn-add-subscriber" class="btn primary">+ Add Subscriber</button>
+    </div>
+
+    <div id="subscriber-list" class="card-grid"></div>
+
+    <!-- Filter panel -->
+    <div id="filter-panel" class="panel hidden">
+      <div class="toolbar">
+        <h3>Filters for <span id="filter-sub-name"></span></h3>
+        <button id="btn-add-filter" class="btn primary">+ Add Filter</button>
+      </div>
+      <p class="hint">A subscriber with no filters receives every message. Add filters to limit delivery to specific chats or groups.</p>
+      <table id="filter-table">
+        <thead><tr><th>Chat ID</th><th>Group ID</th><th>Created</th><th></th></tr></thead>
+        <tbody id="filter-rows"></tbody>
+      </table>
+    </div>
+
+    <!-- Add/Edit subscriber modal -->
+    <dialog id="modal-subscriber">
+      <form id="form-subscriber" method="dialog">
+        <h3 id="modal-subscriber-title">Add Subscriber</h3>
+        <input type="hidden" id="sub-id" />
+        <label>Name<input type="text" id="sub-name" required placeholder="My service" /></label>
+        <label>URL<input type="url" id="sub-url" required placeholder="https://example.com/webhook" /></label>
+        <label>Secret (optional)<input type="text" id="sub-secret" placeholder="HMAC signing secret" /></label>
+        <div class="modal-actions">
+          <button type="button" id="btn-cancel-subscriber" class="btn">Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Add filter modal -->
+    <dialog id="modal-filter">
+      <form id="form-filter" method="dialog">
+        <h3>Add Filter</h3>
+        <input type="hidden" id="filter-sub-id" />
+        <label>Chat ID
+          <div class="input-row">
+            <input type="text" id="filter-chat-id" placeholder="e.g. 1234567890@c.us" />
+            <button type="button" id="btn-pick-chat" class="btn small">Pick from seen</button>
+          </div>
+        </label>
+        <label>Group ID
+          <input type="text" id="filter-group-id" placeholder="e.g. 1234567890-1234567890@g.us" />
+        </label>
+        <p class="hint">At least one field required. Leave a field blank to treat it as a wildcard.</p>
+        <div id="chat-picker" class="chat-picker hidden">
+          <p>Recent chats:</p>
+          <ul id="chat-picker-list"></ul>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="btn-cancel-filter" class="btn">Cancel</button>
+          <button type="submit" class="btn primary">Add Filter</button>
+        </div>
+      </form>
+    </dialog>
+  </section>
+
+  <!-- ── MESSAGES TAB ─────────────────────────────────────────────────────── -->
+  <section id="tab-messages" class="tab">
+    <div class="toolbar">
+      <h2>Recent Messages</h2>
+      <div class="filter-row">
+        <input type="text" id="msg-filter-chat" placeholder="Filter by chat ID" />
+        <button id="btn-load-messages" class="btn">Load</button>
+      </div>
+    </div>
+    <table id="messages-table">
+      <thead><tr><th>ID</th><th>Chat</th><th>Type</th><th>Body</th><th>Time</th></tr></thead>
+      <tbody id="messages-rows"></tbody>
+    </table>
+  </section>
+
+  <!-- ── STATUS TAB ────────────────────────────────────────────────────────── -->
+  <section id="tab-status" class="tab">
+    <h2>Server Status</h2>
+    <div id="status-card" class="status-grid"></div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,142 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0f1117;
+  --surface:  #1a1d27;
+  --surface2: #232635;
+  --border:   #2e3148;
+  --accent:   #25d366;
+  --accent2:  #1a9e4a;
+  --text:     #e8eaf0;
+  --muted:    #7a7f99;
+  --danger:   #e05c5c;
+  --radius:   8px;
+}
+
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; min-height: 100vh; }
+
+/* ── header ── */
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 18px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+nav { display: flex; gap: 4px; }
+
+.tab-btn {
+  background: none; border: none; color: var(--muted); padding: 6px 14px;
+  border-radius: var(--radius); cursor: pointer; font-size: 13px; transition: all .15s;
+}
+.tab-btn:hover  { background: var(--surface2); color: var(--text); }
+.tab-btn.active { background: var(--surface2); color: var(--accent); font-weight: 600; }
+
+.wa-badge {
+  margin-left: auto; padding: 4px 12px; border-radius: 20px;
+  background: var(--surface2); font-size: 12px; color: var(--muted);
+  border: 1px solid var(--border);
+}
+.wa-badge.connected { color: var(--accent); border-color: var(--accent2); }
+
+/* ── tabs ── */
+.tab   { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
+.tab.active { display: block; }
+
+/* ── buttons ── */
+.btn {
+  padding: 7px 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px;
+  transition: all .15s;
+}
+.btn:hover          { background: var(--border); }
+.btn.primary        { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+.btn.primary:hover  { background: var(--accent2); border-color: var(--accent2); }
+.btn.danger         { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.danger:hover   { opacity: .85; }
+.btn.small          { padding: 4px 10px; font-size: 12px; }
+
+/* ── toolbar ── */
+.toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px; gap: 12px;
+}
+.toolbar h2, .toolbar h3 { font-size: 16px; font-weight: 600; }
+
+/* ── subscriber cards ── */
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px; margin-bottom: 24px;
+}
+.subscriber-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; cursor: pointer; transition: border-color .15s;
+}
+.subscriber-card:hover, .subscriber-card.selected { border-color: var(--accent); }
+.subscriber-card h4   { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.subscriber-card .url { color: var(--muted); font-size: 12px; word-break: break-all; margin-bottom: 8px; }
+.card-meta    { display: flex; gap: 8px; align-items: center; }
+.card-actions { display: flex; gap: 6px; margin-top: 10px; }
+
+.badge          { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge.active   { background: #1a3d2e; color: var(--accent); }
+.badge.inactive { background: #3d1a1a; color: var(--danger); }
+.badge.filters  { background: var(--surface2); color: var(--muted); }
+
+/* ── filter panel ── */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+.panel.hidden { display: none; }
+.hint { color: var(--muted); font-size: 12px; margin-bottom: 12px; margin-top: 4px; }
+
+/* ── table ── */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 8px 12px; color: var(--muted); font-weight: 500; font-size: 12px; border-bottom: 1px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--surface2); }
+
+/* ── dialogs ── */
+dialog {
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px; min-width: 380px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.6);
+}
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog h3 { margin-bottom: 16px; font-size: 16px; }
+dialog label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+dialog label input { display: block; width: 100%; margin-top: 4px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+input[type=text], input[type=url] {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; width: 100%;
+}
+input:focus { border-color: var(--accent); }
+
+.input-row { display: flex; gap: 8px; align-items: center; }
+.input-row input { flex: 1; }
+
+/* ── chat picker ── */
+.chat-picker {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; margin-top: 8px; max-height: 180px; overflow-y: auto;
+}
+.chat-picker.hidden { display: none; }
+.chat-picker p  { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.chat-picker ul { list-style: none; }
+.chat-picker li {
+  padding: 6px 8px; cursor: pointer; border-radius: 4px; font-size: 12px;
+  display: flex; justify-content: space-between;
+}
+.chat-picker li:hover { background: var(--border); }
+
+/* ── status grid ── */
+.status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 8px; }
+.status-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.status-item .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.status-item .value { font-size: 18px; font-weight: 600; }
+
+/* ── messages tab ── */
+.filter-row { display: flex; gap: 8px; }
+.filter-row input { flex: 1; }
+
+.empty { color: var(--muted); text-align: center; padding: 32px; font-size: 13px; }

@@ -1,0 +1,155 @@
+'use strict';
+
+const pool = require('./db');
+
+const LOOKBACK_DAYS  = 14;
+const MSG_LIMIT      = 2000;  // per chat — fetchMessages auto-loads earlier pages
+const CHAT_DELAY_MS  = 300;   // brief pause between chats to avoid rate-limiting
+
+/**
+ * Fire-and-forget: fetch all messages from the last LOOKBACK_DAYS days
+ * across every chat/group and save them to the messages table.
+ *
+ * @param {import('whatsapp-web.js').Client} client
+ * @param {string} clientId
+ */
+function startHistoricalSync(client, clientId) {
+    setImmediate(async () => {
+        try {
+            await _runSync(client, clientId);
+        } catch (err) {
+            console.error('[sync] fatal error:', err.message);
+        }
+    });
+}
+
+async function _runSync(client, clientId) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);
+
+    console.log(`[sync] starting — last ${LOOKBACK_DAYS} days (since ${cutoff.toISOString()})`);
+
+    let chats;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            chats = await client.getChats();
+            break;
+        } catch (err) {
+            console.error(`[sync] getChats attempt ${attempt}/3 failed: ${err.message}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 15000 * attempt));
+        }
+    }
+    if (!chats) {
+        console.error('[sync] could not load chats after 3 attempts, aborting');
+        return;
+    }
+
+    console.log(`[sync] ${chats.length} chats found`);
+
+    // Persist chat names for group name resolution
+    for (const chat of chats) {
+        const name = chat.name || null;
+        const chatId = chat.id._serialized;
+        const isGroup = chat.isGroup || false;
+        if (name) {
+            await pool.query(
+                `INSERT INTO chat_metadata (chat_id, name, is_group, updated_at)
+                 VALUES ($1, $2, $3, NOW())
+                 ON CONFLICT (chat_id) DO UPDATE SET name = EXCLUDED.name, is_group = EXCLUDED.is_group, updated_at = NOW()`,
+                [chatId, name, isGroup]
+            ).catch(() => {}) // non-fatal
+        }
+    }
+
+    let totalSaved = 0;
+    let totalSkipped = 0;
+
+    for (const chat of chats) {
+        const name = chat.name || chat.id._serialized;
+        try {
+            const { saved, skipped } = await _syncChat(chat, cutoff, clientId);
+            if (saved > 0 || skipped > 0) {
+                console.log(`[sync]   ${name}: +${saved} saved, ${skipped} already existed`);
+            }
+            totalSaved   += saved;
+            totalSkipped += skipped;
+        } catch (err) {
+            console.error(`[sync]   ${name}: error — ${err.message}`);
+        }
+        // Small delay to avoid hammering WhatsApp
+        await new Promise(r => setTimeout(r, CHAT_DELAY_MS));
+    }
+
+    console.log(`[sync] done — ${totalSaved} saved, ${totalSkipped} already existed`);
+}
+
+async function _syncChat(chat, cutoff, clientId) {
+    // fetchMessages with a high limit automatically calls loadEarlierMsgs
+    // internally until it has enough messages or the store is exhausted.
+    const messages = await chat.fetchMessages({ limit: MSG_LIMIT });
+
+    // Messages come back sorted oldest-first. Filter to our window.
+    const inWindow = messages.filter(m => new Date(m.timestamp * 1000) >= cutoff);
+
+    let saved = 0;
+    let skipped = 0;
+
+    for (const msg of inWindow) {
+        const result = await _saveMessage(msg, clientId);
+        if (result === 'saved')   saved++;
+        else                      skipped++;
+    }
+
+    // Background media download for messages with media (fire-and-forget)
+    const { downloadAndStore } = require('./mediaDownloader');
+    for (const msg of inWindow) {
+        if (msg.hasMedia) {
+            downloadAndStore(msg).catch(() => {});
+        }
+    }
+
+    return { saved, skipped };
+}
+
+async function _saveMessage(msg, clientId) {
+    const waId = msg.id?._serialized ?? null;
+
+    // For group messages, the chat ID is msg.id.remote (the group JID).
+    // For DMs, it's msg.from (for incoming) or msg.to (for outgoing).
+    const chatId  = msg.id?.remote ?? msg.from ?? null;
+    const groupId = msg.isGroup ? chatId : null;
+
+    let jsonData;
+    try {
+        jsonData = JSON.stringify(msg._data ?? null);
+    } catch (_) {
+        jsonData = JSON.stringify({ _error: 'could not serialize' });
+    }
+
+    try {
+        const res = await pool.query(
+            `INSERT INTO messages (client_id, event, data, chat_id, group_id, msg_type, wa_msg_id, ts)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (wa_msg_id) WHERE wa_msg_id IS NOT NULL DO NOTHING
+             RETURNING id`,
+            [
+                clientId,
+                'message_historical',
+                jsonData,
+                chatId,
+                groupId,
+                msg.type ?? null,
+                waId,
+                new Date(msg.timestamp * 1000),
+            ]
+        );
+
+        // RETURNING id is empty when ON CONFLICT DO NOTHING fires
+        return res.rowCount > 0 ? 'saved' : 'skipped';
+    } catch (err) {
+        console.error('[sync] DB error:', err.message);
+        return 'skipped';
+    }
+}
+
+module.exports = { startHistoricalSync };

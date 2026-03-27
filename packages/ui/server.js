@@ -157,6 +157,12 @@ const AGENTS = {
     description: 'Imports Google Gemini conversation history from a Google Takeout export',
     entrypoint:  path.resolve(__dirname, '../agents/ai/gemini.js'),
   },
+  whatsapp: {
+    id:          'whatsapp',
+    name:        'WhatsApp Connector',
+    description: 'Bridges WhatsApp Web to Postgres — saves messages and fans out to webhook subscribers',
+    entrypoint:  path.resolve(__dirname, '../agents/whatsapp/src/app.js'),
+  },
 };
 
 // ── Process registry ──────────────────────────────────────────────────────────
