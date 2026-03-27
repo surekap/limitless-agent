@@ -572,9 +572,9 @@ async function whatsappStats() {
   try {
     const { rows } = await db.query(`
       SELECT
-        COUNT(*)                                                       AS total_messages,
-        COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24h')    AS today,
-        MAX(timestamp)                                                 AS last_message_at
+        COUNT(*)                                                 AS total_messages,
+        COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '24h')    AS today,
+        MAX(ts)                                                  AS last_message_at
       FROM public.messages
     `);
     return rows[0];
