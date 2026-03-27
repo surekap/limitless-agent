@@ -97,6 +97,15 @@ function AgentStats({ id, stats }) {
       </div>
     )
   }
+  if (id === 'whatsapp') {
+    return (
+      <div className="agent-stats">
+        <div className="stat"><span className="stat-val">{formatNum(stats.total_messages)}</span><span className="stat-label">Total messages</span></div>
+        <div className="stat"><span className="stat-val">{formatNum(stats.today)}</span><span className="stat-label">Today</span></div>
+        <div className="stat"><span className="stat-val dim">{relativeTime(stats.last_message_at)}</span><span className="stat-label">Last message</span></div>
+      </div>
+    )
+  }
   return null
 }
 
@@ -518,6 +527,84 @@ function ResearchConfigForm({ config, onSave }) {
   )
 }
 
+function WhatsAppConfigForm({ config, onSave }) {
+  const [clientId, setClientId] = useState(config['whatsapp.CLIENT_ID'] || '')
+  const [saving, setSaving]     = useState(false)
+  const [feedback, setFeedback] = useState('')
+
+  useEffect(() => { setClientId(config['whatsapp.CLIENT_ID'] || '') }, [config])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    if (!clientId.trim()) { setFeedback('Client ID is required'); return }
+    setSaving(true)
+    try {
+      await onSave({ 'whatsapp.CLIENT_ID': clientId.trim() })
+      setFeedback('Saved')
+      setTimeout(() => setFeedback(''), 3500)
+    } catch { setFeedback('Save failed') }
+    setSaving(false)
+  }
+
+  return (
+    <form className="config-form" onSubmit={handleSubmit}>
+      <div className="form-section-title">WhatsApp Bridge</div>
+      <div className="form-row">
+        <label>Client ID</label>
+        <input value={clientId} onChange={e => setClientId(e.target.value)}
+          placeholder="e.g. my-phone" autoComplete="off" />
+      </div>
+      <div style={{ fontSize: '0.775rem', color: 'var(--text-3, #888)', marginBottom: '0.5rem' }}>
+        A unique name for this WhatsApp session. Used to persist authentication between restarts.
+        Start the agent after saving — a QR code will appear in the Logs tab.
+      </div>
+      <div className="form-actions">
+        <div><span className={`save-feedback${feedback ? ' visible' : ''}`}>{feedback}</span></div>
+        <button type="submit" className="btn btn-save" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+    </form>
+  )
+}
+
+function WhatsAppQrDisplay({ agentId }) {
+  const [qrDataUrl, setQrDataUrl] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const { qr } = await apiFetch('GET', `/api/agents/${agentId}/qr`)
+        if (cancelled) return
+        if (qr) {
+          const QRCode = (await import('qrcode')).default
+          const url = await QRCode.toDataURL(qr, { width: 240, margin: 2, color: { dark: '#000', light: '#fff' } })
+          if (!cancelled) setQrDataUrl(url)
+        } else {
+          setQrDataUrl(null)
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const iv = setInterval(poll, 3000)
+    return () => { cancelled = true; clearInterval(iv) }
+  }, [agentId])
+
+  if (!qrDataUrl) return null
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem',
+      padding: '1rem', marginBottom: '0.75rem',
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '8px',
+    }}>
+      <span style={{ fontSize: '0.8125rem', fontWeight: 500 }}>Scan with WhatsApp to connect</span>
+      <img src={qrDataUrl} alt="WhatsApp QR Code" style={{ width: 200, height: 200, borderRadius: '4px' }} />
+      <span style={{ fontSize: '0.75rem', color: 'var(--text-3, #888)' }}>
+        Open WhatsApp → Linked devices → Link a device
+      </span>
+    </div>
+  )
+}
+
 function AgentLlmTab({ agentId, llmList, allProviders, onSave, usageRow }) {
   const [list, setList] = useState(llmList || [])
   useEffect(() => setList(llmList || []), [llmList])
@@ -632,7 +719,7 @@ export default function AgentsPage() {
   }
 
   async function loadAgentConfig(id) {
-    if (id === 'research') {
+    if (id === 'research' || id === 'whatsapp') {
       await loadSystemConfig()
       return
     }
@@ -921,7 +1008,10 @@ export default function AgentsPage() {
                 <div style={{ padding: '0.75rem 0' }}>
                   {/* Logs tab */}
                   {tab === 'logs' && (
-                    <LogViewer agentId={id} expanded={true} />
+                    <>
+                      {id === 'whatsapp' && <WhatsAppQrDisplay agentId={id} />}
+                      <LogViewer agentId={id} expanded={true} />
+                    </>
                   )}
 
                   {/* Config tab */}
@@ -936,7 +1026,10 @@ export default function AgentsPage() {
                       {id === 'research' && (
                         <ResearchConfigForm config={systemConfig} onSave={saveSystemConfig} />
                       )}
-                      {!['email', 'limitless', 'research', 'openai', 'gemini'].includes(id) && (
+                      {id === 'whatsapp' && (
+                        <WhatsAppConfigForm config={systemConfig} onSave={saveSystemConfig} />
+                      )}
+                      {!['email', 'limitless', 'research', 'openai', 'gemini', 'whatsapp'].includes(id) && (
                         <div style={{ color: 'var(--text-3, #888)', fontSize: '.825rem' }}>No configurable options for this agent.</div>
                       )}
                     </div>

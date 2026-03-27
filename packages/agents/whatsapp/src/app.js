@@ -79,9 +79,8 @@ client.on(Events.READY, () => {
 });
 client.on(Events.DISCONNECTED,       (reason) => { console.log('[wa] disconnected:', reason); setWaState('DISCONNECTED'); });
 client.on('qr', qr => {
-    const qrcode = require('qrcode-terminal');
-    console.log('\n[wa] Scan this QR code with WhatsApp:\n');
-    qrcode.generate(qr, { small: true });
+    // Emit raw QR data on a single line so the UI can render it as a scannable image
+    process.stdout.write('[WA_QR]' + qr + '\n');
     setWaState('AWAITING_QR');
 });
 client.on(Events.REMOTE_SESSION_SAVED, () => console.log('[wa] session saved to store'));

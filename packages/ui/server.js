@@ -108,8 +108,30 @@ async function migrateEnvToDb() {
   await seed('limitless.PROCESS_INTERVAL_CRON',   '*/1 * * * *');
   await seed('limitless.PROCESSING_BATCH_SIZE',   '15');
 
+  // WhatsApp — CLIENT_ID has no sensible default; leave blank for user to fill
+  await seed('whatsapp.CLIENT_ID', '');
+
   if (migrated > 0) {
     console.log(`[server] seeded ${migrated} config keys to DB`);
+  }
+}
+
+// ── Chromium setup (idempotent) ───────────────────────────────────────────────
+
+async function ensurePuppeteerChrome() {
+  try {
+    const puppeteer = require('puppeteer');
+    const execPath = puppeteer.executablePath();
+    if (fs.existsSync(execPath)) return; // already installed
+    console.log('[server] Downloading Chromium for WhatsApp bridge (one-time, ~200 MB)…');
+    const { execSync } = require('child_process');
+    execSync('npm run setup --workspace=packages/agents/whatsapp', {
+      stdio: 'inherit',
+      cwd:   path.resolve(__dirname, '../..'),
+    });
+    console.log('[server] Chromium ready');
+  } catch (err) {
+    console.warn('[server] Chromium setup skipped:', err.message);
   }
 }
 
@@ -315,7 +337,9 @@ function writeEnv(updates) {
 
 // ── Agent process management ──────────────────────────────────────────────────
 
-function startAgent(id) {
+const waQr = {}; // agentId → { data: string, ts: Date } — latest WhatsApp QR
+
+async function startAgent(id) {
   if (procs[id]?.proc || procs[id]?.recovered) return { error: 'Already running' };
   const def = AGENTS[id];
   if (!def) return { error: 'Unknown agent' };
@@ -323,8 +347,18 @@ function startAgent(id) {
   // Reload env so the spawned process gets latest config
   dotenv.config({ path: ENV_PATH, override: true });
 
+  // For the WhatsApp agent, inject CLIENT_ID from system.config
+  let extraEnv = {};
+  if (id === 'whatsapp') {
+    const { getConfig } = require('../agents/shared/config');
+    const clientId = await getConfig('whatsapp.CLIENT_ID');
+    if (!clientId) return { error: 'WhatsApp CLIENT_ID is not configured. Set it in the Config tab first.' };
+    extraEnv.CLIENT_ID = clientId;
+    delete waQr[id];
+  }
+
   const proc = spawn(process.execPath, [def.entrypoint], {
-    env:   { ...process.env },
+    env:   { ...process.env, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -342,11 +376,24 @@ function startAgent(id) {
 
   appendLog(id, 'system', `[${def.name}] started (pid ${proc.pid})`);
 
-  proc.stdout.on('data', d => appendLog(id, 'stdout', d));
+  proc.stdout.on('data', d => {
+    const text = d.toString();
+    // Capture WhatsApp QR codes emitted as [WA_QR]<data>
+    const qrMatch = text.match(/\[WA_QR\]([^\n]+)/);
+    if (qrMatch) {
+      waQr[id] = { data: qrMatch[1].trim(), ts: new Date() };
+    }
+    // Clear QR once authenticated
+    if (text.includes('[wa] ready') || text.includes('[wa] authenticated')) {
+      delete waQr[id];
+    }
+    appendLog(id, 'stdout', d);
+  });
   proc.stderr.on('data', d => appendLog(id, 'stderr', d));
 
   proc.on('exit', code => {
     appendLog(id, 'system', `[${def.name}] process exited (code ${code ?? '?'})`);
+    delete waQr[id];
     if (procs[id]) {
       procs[id].exitCode  = code;
       procs[id].proc      = null;
@@ -520,6 +567,20 @@ async function aiStats(provider) {
   } catch { return null; }
 }
 
+async function whatsappStats() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(*)                                                       AS total_messages,
+        COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24h')    AS today,
+        MAX(timestamp)                                                 AS last_message_at
+      FROM public.messages
+    `);
+    return rows[0];
+  } catch { return null; }
+}
+
 // ── Config helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -567,9 +628,9 @@ app.get('/api/media/wa/:msgId', async (req, res) => {
 
 // GET /api/agents
 app.get('/api/agents', async (req, res) => {
-  const [eStats, lStats, rStats, pStats, oaiStats, gemStats, rsStats] = await Promise.all([
+  const [eStats, lStats, rStats, pStats, oaiStats, gemStats, rsStats, waStats] = await Promise.all([
     emailStats(), limitlessStats(), relationshipsStats(), projectsStats(),
-    aiStats('openai'), aiStats('gemini'), researchStats(),
+    aiStats('openai'), aiStats('gemini'), researchStats(), whatsappStats(),
   ]);
   const result = {};
 
@@ -592,6 +653,7 @@ app.get('/api/agents', async (req, res) => {
                  : id === 'openai'        ? oaiStats
                  : id === 'gemini'        ? gemStats
                  : id === 'research'      ? rsStats
+                 : id === 'whatsapp'      ? waStats
                  : null,
     };
   }
@@ -616,10 +678,16 @@ app.get('/api/agents/:id/logs', (req, res) => {
 });
 
 // POST /api/agents/:id/start
-app.post('/api/agents/:id/start', (req, res) => {
-  const result = startAgent(req.params.id);
-  if (result.error) return res.status(400).json(result);
-  res.json(result);
+app.post('/api/agents/:id/start', async (req, res) => {
+  const result = await startAgent(req.params.id);
+  if (result?.error) return res.status(400).json(result);
+  res.json(result || { ok: true });
+});
+
+// GET /api/agents/:id/qr  — latest WhatsApp QR code data (null if not waiting)
+app.get('/api/agents/:id/qr', (req, res) => {
+  const qr = waQr[req.params.id];
+  res.json({ qr: qr?.data || null, ts: qr?.ts || null });
 });
 
 // POST /api/agents/:id/stop
@@ -1732,6 +1800,9 @@ async function startServer() {
       console.error('[server] startup migration failed:', err.message);
     }
   }
+
+  // Download Chromium for the WhatsApp bridge if not already present (idempotent)
+  await ensurePuppeteerChrome();
 
   const PORT = process.env.UI_PORT || 4001;
   app.listen(PORT, () => {
