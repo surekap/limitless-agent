@@ -526,9 +526,9 @@ export default function AgentsPage() {
 
   async function loadAgentConfig(id) {
     try {
-      const data = await apiFetch('GET', `/api/system/agents/${id}/config`)
-      if (data && !data.error) {
-        setAgentConfig(prev => ({ ...prev, [id]: data }))
+      const data = await apiFetch('GET', '/api/config')
+      if (data && data[id]) {
+        setAgentConfig(prev => ({ ...prev, [id]: data[id] }))
       }
     } catch {}
   }
