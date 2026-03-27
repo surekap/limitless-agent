@@ -1509,6 +1509,51 @@ app.get('/api/projects/insights/open', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Docs / Manual API ─────────────────────────────────────────────────────────
+
+const DOCS_DIR   = path.resolve(__dirname, '../../docs/manual');
+const MEDIA_DIR  = path.resolve(__dirname, '../../docs/infographics');
+
+function docTitle(filename, content) {
+  const m = content.match(/^#\s+(.+)$/m);
+  if (m) return m[1].trim();
+  return filename
+    .replace(/\.md$/, '')
+    .replace(/^\d+-/, '')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// GET /api/docs  — list all docs in order
+app.get('/api/docs', (req, res) => {
+  try {
+    const files = fs.readdirSync(DOCS_DIR).filter(f => f.endsWith('.md')).sort();
+    const docs = files.map(f => {
+      const content = fs.readFileSync(path.join(DOCS_DIR, f), 'utf8');
+      return { slug: f.replace(/\.md$/, ''), filename: f, title: docTitle(f, content) };
+    });
+    res.json(docs);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/docs/media/:filename  — serve infographic images and videos
+app.get('/api/docs/media/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename); // prevent traversal
+  const fp = path.join(MEDIA_DIR, filename);
+  if (!fs.existsSync(fp)) return res.status(404).end();
+  res.sendFile(fp);
+});
+
+// GET /api/docs/:slug  — markdown content
+app.get('/api/docs/:slug', (req, res) => {
+  const filename = req.params.slug + '.md';
+  const fp = path.join(DOCS_DIR, filename);
+  if (!fp.startsWith(DOCS_DIR)) return res.status(400).end(); // traversal guard
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
+  const content = fs.readFileSync(fp, 'utf8');
+  res.json({ slug: req.params.slug, title: docTitle(filename, content), content });
+});
+
 // ── Search API ────────────────────────────────────────────────────────────────
 
 // GET /api/search?q=...&limit=20&sources=email,whatsapp,...

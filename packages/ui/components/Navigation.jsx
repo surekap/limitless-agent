@@ -10,6 +10,7 @@ const NAV_LINKS = [
   { href: '/projects',       label: 'Projects' },
   { href: '/agents',         label: 'Agents' },
   { href: '/search',         label: 'Search' },
+  { href: '/manual/README',  label: 'Manual' },
 ]
 
 export default function Navigation() {
@@ -27,7 +28,7 @@ export default function Navigation() {
           <Link
             key={l.href}
             href={l.href}
-            className={`${styles.link} ${pathname === l.href ? styles.active : ''}`}
+            className={`${styles.link} ${pathname === l.href || (l.href.startsWith('/manual') && pathname.startsWith('/manual')) ? styles.active : ''}`}
           >
             {l.label}
           </Link>

@@ -1,5 +1,9 @@
 # secondbrain User Manual
 
+![Overview](../infographics/overview.png)
+
+[secondbrain__Your_Intel_Layer.mp4](../infographics/secondbrain__Your_Intel_Layer.mp4)
+
 This manual is for a person who has the software installed and wants to finish setup, connect data sources, and start using it with confidence.
 
 Use the guides in this order:

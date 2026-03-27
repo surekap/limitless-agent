@@ -2,6 +2,14 @@
 
 A personal intelligence system that automatically synthesizes your email, voice recordings, and WhatsApp conversations into actionable insights about your projects and relationships.
 
+![Overview](docs/infographics/overview.png)
+
+<video src="docs/infographics/secondbrain__Your_Intel_Layer.mp4" controls style="max-width:100%;border-radius:8px"></video>
+
+![Security](docs/infographics/security.png)
+
+📖 **[User Manual](docs/manual/README.md)** — setup guides, agent configuration, and workflow playbooks.
+
 ---
 
 ## Architecture
