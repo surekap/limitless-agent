@@ -106,9 +106,42 @@ function AgentStats({ id, stats }) {
       </div>
     )
   }
+  if (id === 'apple-contacts') {
+    return (
+      <div className="agent-stats">
+        <div className="stat"><span className="stat-val">{formatNum(stats?.total_synced)}</span><span className="stat-label">Synced</span></div>
+        <div className="stat"><span className="stat-val">{formatNum(stats?.no_comms)}</span><span className="stat-label">No comms</span></div>
+        <div className="stat"><span className="stat-val dim">{relativeTime(stats?.last_sync_at)}</span><span className="stat-label">Last sync</span></div>
+      </div>
+    )
+  }
   return null
 }
 
+
+function AppleContactsControls({ agent, onSync, onUpload, syncing, importing }) {
+  const fileRef = useRef(null)
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      {agent.nativeAvailable && (
+        <button className="btn btn-primary" disabled={syncing} onClick={onSync}>
+          {syncing ? 'Syncing…' : '⟳ Sync Now'}
+        </button>
+      )}
+      <>
+        <input
+          type="file" accept=".vcf"
+          style={{ display: 'none' }}
+          ref={fileRef}
+          onChange={e => { onUpload(e.target.files[0]); e.target.value = '' }}
+        />
+        <button className="btn btn-secondary" disabled={importing} onClick={() => fileRef.current?.click()}>
+          {importing ? 'Uploading…' : '↑ Upload VCF'}
+        </button>
+      </>
+    </div>
+  )
+}
 
 function LogViewer({ agentId, expanded }) {
   const [logs, setLogs] = useState([])
@@ -789,6 +822,37 @@ export default function AgentsPage() {
 
   const [importing, setImporting] = useState({}) // { agentId: true|false }
   const importInputRef = useRef({})
+  const [acSyncing,   setAcSyncing]   = useState(false)
+  const [acImporting, setAcImporting] = useState(false)
+
+  async function handleAppleSync() {
+    setAcSyncing(true)
+    try {
+      await apiFetch('POST', '/api/agents/apple-contacts/start')
+      showToast('Apple Contacts sync started')
+    } catch (err) {
+      showToast(err.message || 'Sync failed')
+    }
+    setAcSyncing(false)
+  }
+
+  async function handleAppleVcfUpload(file) {
+    if (!file) return
+    setAcImporting(true)
+    try {
+      const text = await file.text()
+      const result = await fetch('/api/agents/apple-contacts/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/vcard' },
+        body: text,
+      }).then(r => r.json())
+      if (result.error) throw new Error(result.error)
+      showToast(`Synced ${result.total} contacts: ${result.matched} enriched, ${result.created} new`)
+    } catch (err) {
+      showToast(err.message || 'Upload failed')
+    }
+    setAcImporting(false)
+  }
 
   async function handleImport(id, file) {
     if (!file) return
@@ -960,7 +1024,15 @@ export default function AgentsPage() {
                     {s === 'running' && agent.startTime && (
                       <span style={{ fontSize: '.75rem', color: 'var(--text-3, #888)' }}>started {relativeTime(agent.startTime)}</span>
                     )}
-                    {(id === 'openai' || id === 'gemini') ? (
+                    {id === 'apple-contacts' ? (
+                      <AppleContactsControls
+                        agent={agent}
+                        onSync={handleAppleSync}
+                        onUpload={handleAppleVcfUpload}
+                        syncing={acSyncing}
+                        importing={acImporting}
+                      />
+                    ) : (id === 'openai' || id === 'gemini') ? (
                       <>
                         <input
                           type="file" accept=".json"
