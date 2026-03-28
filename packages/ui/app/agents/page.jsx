@@ -122,23 +122,32 @@ function AgentStats({ id, stats }) {
 function AppleContactsControls({ agent, onSync, onUpload, syncing, importing }) {
   const fileRef = useRef(null)
   return (
-    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {agent.nativeAvailable && (
+          <button className="btn btn-primary" disabled={syncing} onClick={onSync}>
+            {syncing ? 'Syncing…' : '⟳ Sync Now'}
+          </button>
+        )}
+        <>
+          <input
+            type="file" accept=".vcf"
+            style={{ display: 'none' }}
+            ref={fileRef}
+            onChange={e => { onUpload(e.target.files[0]); e.target.value = '' }}
+          />
+          <button className="btn btn-secondary" disabled={importing} onClick={() => fileRef.current?.click()}>
+            {importing ? 'Uploading…' : '↑ Upload VCF'}
+          </button>
+        </>
+      </div>
       {agent.nativeAvailable && (
-        <button className="btn btn-primary" disabled={syncing} onClick={onSync}>
-          {syncing ? 'Syncing…' : '⟳ Sync Now'}
-        </button>
+        <div style={{ fontSize: '0.72rem', color: 'var(--text-3, #888)', lineHeight: 1.5 }}>
+          First sync will prompt for Contacts permission — approve it and macOS will list <strong>secondbrain</strong> under{' '}
+          System Settings → Privacy &amp; Security → Contacts.
+          If access was previously denied, re-enable it there, then click Sync Now.
+        </div>
       )}
-      <>
-        <input
-          type="file" accept=".vcf"
-          style={{ display: 'none' }}
-          ref={fileRef}
-          onChange={e => { onUpload(e.target.files[0]); e.target.value = '' }}
-        />
-        <button className="btn btn-secondary" disabled={importing} onClick={() => fileRef.current?.click()}>
-          {importing ? 'Uploading…' : '↑ Upload VCF'}
-        </button>
-      </>
     </div>
   )
 }

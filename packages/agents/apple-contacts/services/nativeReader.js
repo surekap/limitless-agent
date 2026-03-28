@@ -22,29 +22,22 @@ try {
 async function readNativeContacts() {
   // Check permission before calling getAllContacts — it returns [] silently when denied
   const authStatus = contacts.getAuthStatus();
-  if (authStatus === 'Denied' || authStatus === 'Restricted') {
-    console.error(
-      '[apple-contacts] Access to Contacts denied. ' +
-      'Grant access in System Settings → Privacy & Security → Contacts, then restart the sync.'
-    );
-    process.exit(1);
-  }
   if (authStatus === 'Not Determined') {
-    // Request permission — this shows the macOS permission dialog
+    // First run — show the macOS permission dialog.
+    // macOS will display "secondbrain wants access to your Contacts".
+    console.log('[apple-contacts] Requesting Contacts permission…');
     await new Promise(resolve => contacts.requestAccess(resolve));
     const newStatus = contacts.getAuthStatus();
     if (newStatus !== 'Authorized') {
-      console.error('[apple-contacts] Contacts permission not granted. Cannot sync.');
+      printDeniedInstructions();
       process.exit(1);
     }
+  } else if (authStatus === 'Denied' || authStatus === 'Restricted') {
+    printDeniedInstructions();
+    process.exit(1);
   }
 
-  let raw;
-  try {
-    raw = contacts.getAllContacts();
-  } catch (err) {
-    throw err;
-  }
+  const raw = contacts.getAllContacts();
 
   if (!Array.isArray(raw)) {
     throw new Error('node-mac-contacts.getAllContacts() returned unexpected value');
@@ -93,6 +86,19 @@ function normalizeNativeContact(c) {
     job_title:        (c.jobTitle || '').trim() || null,
     avatar_data:      avatarData,
   };
+}
+
+function printDeniedInstructions() {
+  console.error('');
+  console.error('[apple-contacts] ❌ Contacts access denied.');
+  console.error('');
+  console.error('To fix this:');
+  console.error('  1. Open: System Settings → Privacy & Security → Contacts');
+  console.error('  2. Find "secondbrain" in the list and toggle it ON.');
+  console.error('     (If it\'s not listed yet, click Sync Now once — macOS will prompt you.)');
+  console.error('  3. If you previously denied the request, click the toggle to re-enable it.');
+  console.error('  4. Click Sync Now on the Agents page to retry.');
+  console.error('');
 }
 
 module.exports = { readNativeContacts };

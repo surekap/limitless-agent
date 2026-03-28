@@ -1,5 +1,8 @@
 'use strict';
 
+// Set process title so macOS shows "secondbrain" in Privacy & Security → Contacts
+process.title = 'secondbrain';
+
 const path = require('path');
 const dotenv = require('dotenv');
 
