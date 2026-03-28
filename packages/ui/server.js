@@ -187,6 +187,13 @@ const AGENTS = {
     description: 'Bridges WhatsApp Web to Postgres — saves messages and fans out to webhook subscribers',
     entrypoint:  path.resolve(__dirname, '../agents/whatsapp/src/app.js'),
   },
+  'apple-contacts': {
+    id:              'apple-contacts',
+    name:            'Apple Contacts',
+    description:     'Syncs Apple Contacts into the relationships database. VCF upload available on all platforms.',
+    entrypoint:      path.resolve(__dirname, '../agents/apple-contacts/index.js'),
+    nativeAvailable: process.platform === 'darwin',
+  },
 };
 
 // ── Process registry ──────────────────────────────────────────────────────────
@@ -582,6 +589,20 @@ async function whatsappStats() {
   } catch { return null; }
 }
 
+async function appleContactsStats() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE apple_contact_id IS NOT NULL)                               AS total_synced,
+        COUNT(*) FILTER (WHERE apple_contact_id IS NOT NULL AND first_interaction_at IS NULL) AS no_comms,
+        MAX(updated_at) FILTER (WHERE apple_contact_id IS NOT NULL)                        AS last_sync_at
+      FROM relationships.contacts
+    `);
+    return rows[0];
+  } catch { return null; }
+}
+
 // ── Config helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -629,9 +650,9 @@ app.get('/api/media/wa/:msgId', async (req, res) => {
 
 // GET /api/agents
 app.get('/api/agents', async (req, res) => {
-  const [eStats, lStats, rStats, pStats, oaiStats, gemStats, rsStats, waStats] = await Promise.all([
+  const [eStats, lStats, rStats, pStats, oaiStats, gemStats, rsStats, waStats, acStats] = await Promise.all([
     emailStats(), limitlessStats(), relationshipsStats(), projectsStats(),
-    aiStats('openai'), aiStats('gemini'), researchStats(), whatsappStats(),
+    aiStats('openai'), aiStats('gemini'), researchStats(), whatsappStats(), appleContactsStats(),
   ]);
   const result = {};
 
@@ -647,15 +668,17 @@ app.get('/api/agents', async (req, res) => {
       startTime:   entry.startTime  || null,
       stoppedAt:   entry.stoppedAt  || null,
       exitCode:    entry.exitCode   ?? null,
-      stats:       id === 'email'         ? eStats
-                 : id === 'limitless'     ? lStats
-                 : id === 'relationships' ? rStats
-                 : id === 'projects'      ? pStats
-                 : id === 'openai'        ? oaiStats
-                 : id === 'gemini'        ? gemStats
-                 : id === 'research'      ? rsStats
-                 : id === 'whatsapp'      ? waStats
-                 : null,
+      stats:          id === 'email'          ? eStats
+                    : id === 'limitless'      ? lStats
+                    : id === 'relationships'  ? rStats
+                    : id === 'projects'       ? pStats
+                    : id === 'openai'         ? oaiStats
+                    : id === 'gemini'         ? gemStats
+                    : id === 'research'       ? rsStats
+                    : id === 'whatsapp'       ? waStats
+                    : id === 'apple-contacts' ? acStats
+                    : null,
+      nativeAvailable: def.nativeAvailable ?? null,
     };
   }
 
@@ -699,6 +722,27 @@ app.post('/api/agents/:id/stop', (req, res) => {
 });
 
 // POST /api/agents/:id/import  — one-shot file import for openai/gemini
+// POST /api/agents/apple-contacts/import  — accepts raw .vcf text
+app.post('/api/agents/apple-contacts/import', express.text({ type: ['text/vcard', 'text/x-vcard', 'text/plain'], limit: '10mb' }), async (req, res) => {
+  try {
+    const vcfText = req.body;
+    if (!vcfText || typeof vcfText !== 'string') {
+      return res.status(400).json({ error: 'Request body must be a .vcf text file' });
+    }
+    const { parseVcf }     = require('../agents/apple-contacts/services/vcfParser');
+    const { syncContacts } = require('../agents/apple-contacts/services/syncer');
+    const contacts = parseVcf(vcfText);
+    if (!contacts.length) {
+      return res.status(400).json({ error: 'No valid vCard records found in the uploaded file' });
+    }
+    const result = await syncContacts(contacts);
+    res.json(result);
+  } catch (err) {
+    console.error('[apple-contacts import]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/agents/:id/import', express.json({ limit: '200mb' }), async (req, res) => {
   const { id } = req.params;
   if (!['openai', 'gemini'].includes(id)) {
