@@ -23,12 +23,14 @@
     "research": "npm start --workspace=packages/agents/research",
     "whatsapp": "npm start --workspace=packages/agents/whatsapp",
     "whatsapp:setup": "npm run setup --workspace=packages/agents/whatsapp",
+    "apple-contacts": "node packages/agents/apple-contacts/index.js",
     "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
   },
   "dependencies": {
+    "node-mac-contacts": "^1.7.2",
     "pdf-parse": "^2.4.5",
     "xlsx": "^0.18.5"
   }
