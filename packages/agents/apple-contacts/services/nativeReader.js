@@ -20,17 +20,29 @@ try {
  * @returns {Promise<Array<NormalizedContact>>}
  */
 async function readNativeContacts() {
+  // Check permission before calling getAllContacts — it returns [] silently when denied
+  const authStatus = contacts.getAuthStatus();
+  if (authStatus === 'Denied' || authStatus === 'Restricted') {
+    console.error(
+      '[apple-contacts] Access to Contacts denied. ' +
+      'Grant access in System Settings → Privacy & Security → Contacts, then restart the sync.'
+    );
+    process.exit(1);
+  }
+  if (authStatus === 'Not Determined') {
+    // Request permission — this shows the macOS permission dialog
+    await new Promise(resolve => contacts.requestAccess(resolve));
+    const newStatus = contacts.getAuthStatus();
+    if (newStatus !== 'Authorized') {
+      console.error('[apple-contacts] Contacts permission not granted. Cannot sync.');
+      process.exit(1);
+    }
+  }
+
   let raw;
   try {
     raw = contacts.getAllContacts();
   } catch (err) {
-    if (err.message && err.message.includes('denied')) {
-      console.error(
-        '[apple-contacts] Access to Contacts denied. ' +
-        'Grant access in System Settings → Privacy & Security → Contacts.'
-      );
-      process.exit(1);
-    }
     throw err;
   }
 

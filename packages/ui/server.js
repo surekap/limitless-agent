@@ -254,8 +254,10 @@ function findProcessByScript(scriptPath) {
     const { execSync } = require('child_process');
     // ps ax: PID STAT CMD...   (works on macOS and Linux)
     const out = execSync('ps ax -o pid,command', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] });
+    // Also check relative path (agents started via `npm run X` use relative paths)
+    const relPath = path.relative(process.cwd(), scriptPath);
     for (const line of out.split('\n')) {
-      if (line.includes(scriptPath)) {
+      if (line.includes(scriptPath) || line.includes(relPath)) {
         const pid = parseInt(line.trim().split(/\s+/)[0], 10);
         if (!isNaN(pid)) return pid;
       }
