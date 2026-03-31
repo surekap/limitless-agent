@@ -12,8 +12,9 @@ const RATES = {
     'claude-haiku-4-5':  { in: 0.00025, out: 0.00125 },
   },
   openai: {
-    'gpt-4o':      { in: 0.0025,  out: 0.010  },
-    'gpt-4o-mini': { in: 0.00015, out: 0.0006 },
+    'gpt-4o':        { in: 0.0025,  out: 0.010  },
+    'gpt-4o-mini':   { in: 0.00015, out: 0.0006 },
+    'gpt-5.4-mini':  { in: 0.00015, out: 0.0006 },
   },
   gemini: {
     'gemini-2.0-flash': { in: 0.00035, out: 0.00105 },
@@ -170,7 +171,7 @@ async function callOpenAI(provider, { system, messages, tools, max_tokens }) {
   })
   const hasSystem = oaiMessages.some(m => m.role === 'system')
   if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
-  const params = { model: provider.model || 'gpt-4o', max_tokens: max_tokens || 4096, messages: oaiMessages }
+  const params = { model: provider.model || 'gpt-4o', max_completion_tokens: max_tokens || 4096, messages: oaiMessages }
   if (tools?.length) {
     params.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
   }

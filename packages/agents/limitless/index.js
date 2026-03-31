@@ -33,8 +33,20 @@ cron.schedule('*/30 * * * * *', async () => {
     }
 });
 
+async function ensureSchema() {
+    const fs   = require('fs');
+    const path = require('path');
+    try {
+        const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8');
+        await agent.db.query(sql);
+        console.log('✅ Schema ready');
+    } catch (err) {
+        console.error('❌ Schema setup error:', err.message);
+    }
+}
+
 console.log('🏁 Starting initial fetch and process...\n');
-fetchLifelogs().then(() => {
+ensureSchema().then(() => fetchLifelogs()).then(() => {
     setTimeout(() => agent.processBatch(10), 2000);
 });
 
