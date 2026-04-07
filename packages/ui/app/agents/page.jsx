@@ -1,6 +1,8 @@
 'use client'
 import { useState, useEffect, useRef, useCallback } from 'react'
 
+const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
+
 async function apiFetch(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } }
   if (body) opts.body = JSON.stringify(body)
@@ -8,6 +10,14 @@ async function apiFetch(method, path, body) {
   const data = await r.json()
   if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`)
   return data
+}
+
+async function fetchModelCatalog({ providerType, capability, baseUrl }) {
+  const params = new URLSearchParams()
+  if (providerType) params.set('provider_type', providerType)
+  if (capability) params.set('capability', capability)
+  if (baseUrl) params.set('base_url', baseUrl)
+  return apiFetch('GET', `/api/system/model-catalog?${params.toString()}`)
 }
 
 function relativeTime(iso) {
@@ -458,21 +468,59 @@ function AiImporterConfigForm({ agentId, config, onSave }) {
 }
 
 function EmbeddingsConfig({ config, onSave }) {
+  const [providerType, setProviderType] = useState(config.EMBEDDING_PROVIDER || 'gemini')
   const [geminiKey, setGeminiKey]   = useState(config.GEMINI_API_KEY || '')
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState(config.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL)
   const [model, setModel]           = useState(config.EMBEDDING_MODEL || '')
+  const [modelOptions, setModelOptions] = useState([])
+  const [modelError, setModelError] = useState('')
   const [saving, setSaving]         = useState(false)
   const [feedback, setFeedback]     = useState('')
 
   useEffect(() => {
+    setProviderType(config.EMBEDDING_PROVIDER || 'gemini')
     setGeminiKey(config.GEMINI_API_KEY || '')
+    setOllamaBaseUrl(config.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL)
     setModel(config.EMBEDDING_MODEL || '')
   }, [config])
+
+  useEffect(() => {
+    let cancelled = false
+    const tid = setTimeout(async () => {
+      try {
+        const data = await fetchModelCatalog({
+          providerType,
+          capability: 'embeddings',
+          baseUrl: providerType === 'ollama' ? ollamaBaseUrl : undefined,
+        })
+        if (cancelled) return
+        const options = Array.isArray(data.models) ? data.models : []
+        setModelOptions(options)
+        setModelError(data.error || '')
+        if (!model && options[0]?.value) setModel(options[0].value)
+      } catch (error) {
+        if (cancelled) return
+        setModelOptions([])
+        setModelError(error.message || 'Failed to load models')
+      }
+    }, providerType === 'ollama' ? 250 : 0)
+
+    return () => {
+      cancelled = true
+      clearTimeout(tid)
+    }
+  }, [providerType, ollamaBaseUrl])
 
   async function handleSubmit(e) {
     e.preventDefault()
     setSaving(true)
     try {
-      await onSave({ GEMINI_API_KEY: geminiKey, EMBEDDING_MODEL: model || null })
+      await onSave({
+        EMBEDDING_PROVIDER: providerType,
+        GEMINI_API_KEY: geminiKey,
+        OLLAMA_BASE_URL: ollamaBaseUrl || DEFAULT_OLLAMA_BASE_URL,
+        EMBEDDING_MODEL: model || null,
+      })
       setFeedback('Saved')
       setTimeout(() => setFeedback(''), 3500)
     } catch { setFeedback('Save failed') }
@@ -483,18 +531,41 @@ function EmbeddingsConfig({ config, onSave }) {
     <div style={{ marginBottom: '1.5rem', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>
       <div style={{ padding: '0.6rem 1rem', background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
         <strong style={{ fontSize: '0.875rem' }}>Embeddings</strong>
-        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--muted, #888)' }}>semantic search · used by indexer</span>
+        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--muted, #888)' }}>semantic search · used by indexer · switch models, then reindex</span>
       </div>
       <form onSubmit={handleSubmit} style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div style={{ flex: 1, minWidth: '180px' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Provider</div>
+          <select value={providerType} onChange={e => { setProviderType(e.target.value); setModel('') }} style={{ width: '100%' }}>
+            <option value="gemini">Gemini</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </div>
         <div style={{ flex: 2, minWidth: '200px' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Gemini API Key</div>
-          <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
-            placeholder="AIza…" autoComplete="new-password" style={{ width: '100%' }} />
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>
+            {providerType === 'ollama' ? 'Ollama Base URL' : 'Gemini API Key'}
+          </div>
+          {providerType === 'ollama' ? (
+            <input type="text" value={ollamaBaseUrl} onChange={e => setOllamaBaseUrl(e.target.value)}
+              placeholder={DEFAULT_OLLAMA_BASE_URL} style={{ width: '100%' }} />
+          ) : (
+            <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
+              placeholder="AIza…" autoComplete="new-password" style={{ width: '100%' }} />
+          )}
         </div>
         <div style={{ flex: 1, minWidth: '180px' }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Embedding model</div>
-          <input type="text" value={model} onChange={e => setModel(e.target.value)}
-            placeholder="gemini-embedding-2-preview" style={{ width: '100%' }} />
+          <select value={model} onChange={e => setModel(e.target.value)} style={{ width: '100%' }}>
+            <option value="">Select an embedding model…</option>
+            {modelOptions.map(option => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          {modelError && (
+            <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#f59e0b' }}>
+              {modelError}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {feedback && <span style={{ fontSize: '0.8rem', color: '#22c55e' }}>{feedback}</span>}
@@ -723,7 +794,15 @@ export default function AgentsPage() {
   // LLM provider state
   const [providers, setProviders] = useState([])
   const [showAddProvider, setShowAddProvider] = useState(false)
-  const [providerForm, setProviderForm] = useState({ name: '', provider_type: 'anthropic', api_key: '', model: '' })
+  const [providerForm, setProviderForm] = useState({
+    name: '',
+    provider_type: 'anthropic',
+    api_key: '',
+    base_url: DEFAULT_OLLAMA_BASE_URL,
+    model: 'claude-sonnet-4-6',
+  })
+  const [providerModelOptions, setProviderModelOptions] = useState([])
+  const [providerModelError, setProviderModelError] = useState('')
 
   // Per-agent LLM priority + config state
   const [agentLlm, setAgentLlm] = useState({})      // { agentId: [rows] }
@@ -804,6 +883,36 @@ export default function AgentsPage() {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    if (!showAddProvider) return
+    let cancelled = false
+    const tid = setTimeout(async () => {
+      try {
+        const data = await fetchModelCatalog({
+          providerType: providerForm.provider_type,
+          capability: 'chat',
+          baseUrl: providerForm.provider_type === 'ollama' ? providerForm.base_url : undefined,
+        })
+        if (cancelled) return
+        const options = Array.isArray(data.models) ? data.models : []
+        setProviderModelOptions(options)
+        setProviderModelError(data.error || '')
+        if (!providerForm.model && options[0]?.value) {
+          setProviderForm(form => ({ ...form, model: options[0].value }))
+        }
+      } catch (error) {
+        if (cancelled) return
+        setProviderModelOptions([])
+        setProviderModelError(error.message || 'Failed to load models')
+      }
+    }, providerForm.provider_type === 'ollama' ? 250 : 0)
+
+    return () => {
+      cancelled = true
+      clearTimeout(tid)
+    }
+  }, [showAddProvider, providerForm.provider_type, providerForm.base_url])
+
 
   async function handleStart(id) {
     try {
@@ -870,11 +979,13 @@ export default function AgentsPage() {
   }
 
   async function addProvider() {
-    if (!providerForm.name.trim()) { showToast('Name is required'); return }
     try {
-      await apiFetch('POST', '/api/system/providers', providerForm)
+      await apiFetch('POST', '/api/system/providers', {
+        ...providerForm,
+        name: providerForm.name.trim() || `${providerForm.provider_type}:${providerForm.model || 'default'}`,
+      })
       setShowAddProvider(false)
-      setProviderForm({ name: '', provider_type: 'anthropic', api_key: '', model: '' })
+      setProviderForm({ name: '', provider_type: 'anthropic', api_key: '', base_url: DEFAULT_OLLAMA_BASE_URL, model: 'claude-sonnet-4-6' })
       await loadProviders()
       showToast('Provider added')
     } catch (err) { showToast(err.message || 'Failed to add provider') }
@@ -931,24 +1042,45 @@ export default function AgentsPage() {
 
           {showAddProvider && (
             <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              <input placeholder="Name" value={providerForm.name}
-                onChange={e => setProviderForm(f => ({ ...f, name: e.target.value }))}
-                style={{ flex: 1, minWidth: '120px' }} />
               <select value={providerForm.provider_type}
-                onChange={e => setProviderForm(f => ({ ...f, provider_type: e.target.value }))}>
+                onChange={e => setProviderForm(f => ({ ...f, provider_type: e.target.value, model: '' }))}
+                style={{ flex: 1, minWidth: '160px' }}>
                 <option value="anthropic">Anthropic</option>
                 <option value="claude_cli">Claude CLI</option>
                 <option value="openai">OpenAI</option>
                 <option value="gemini">Gemini</option>
+                <option value="kimi">Kimi</option>
+                <option value="ollama">Ollama</option>
               </select>
+              {providerForm.provider_type === 'ollama' && (
+                <input placeholder={DEFAULT_OLLAMA_BASE_URL} value={providerForm.base_url}
+                  onChange={e => setProviderForm(f => ({ ...f, base_url: e.target.value }))}
+                  style={{ flex: 2, minWidth: '200px' }} />
+              )}
+              <select value=""
+                onChange={e => e.target.value && setProviderForm(f => ({ ...f, model: e.target.value }))}
+                style={{ flex: 2, minWidth: '220px' }}>
+                <option value="">Suggested models…</option>
+                {providerModelOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <input placeholder="Model" value={providerForm.model}
+                onChange={e => setProviderForm(f => ({ ...f, model: e.target.value }))}
+                style={{ flex: 2, minWidth: '180px' }} />
+              <input placeholder="Name (optional)" value={providerForm.name}
+                onChange={e => setProviderForm(f => ({ ...f, name: e.target.value }))}
+                style={{ flex: 1, minWidth: '140px' }} />
               {providerForm.provider_type !== 'claude_cli' && (
                 <input placeholder="API Key" type="password" value={providerForm.api_key}
                   onChange={e => setProviderForm(f => ({ ...f, api_key: e.target.value }))}
                   style={{ flex: 2, minWidth: '200px' }} />
               )}
-              <input placeholder="Model (e.g. claude-sonnet-4-6)" value={providerForm.model}
-                onChange={e => setProviderForm(f => ({ ...f, model: e.target.value }))}
-                style={{ flex: 2, minWidth: '180px' }} />
+              {providerModelError && (
+                <div style={{ width: '100%', fontSize: '0.75rem', color: '#f59e0b' }}>
+                  {providerModelError}
+                </div>
+              )}
               <button onClick={addProvider} style={{ fontSize: '0.8rem', padding: '0.3rem 0.8rem' }}>Save</button>
             </div>
           )}
@@ -970,7 +1102,10 @@ export default function AgentsPage() {
                   <td style={{ padding: '0.5rem 1rem' }}>
                     <span style={{ fontSize: '0.7rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>{p.provider_type}</span>
                   </td>
-                  <td style={{ padding: '0.5rem 1rem', color: 'var(--muted, #888)' }}>{p.model || '—'}</td>
+                  <td style={{ padding: '0.5rem 1rem', color: 'var(--muted, #888)' }}>
+                    <div>{p.model || '—'}</div>
+                    {p.base_url && <div style={{ fontSize: '0.7rem' }}>{p.base_url}</div>}
+                  </td>
                   <td style={{ padding: '0.5rem 1rem' }}>
                     {!p.is_enabled ? (
                       <span style={{ color: '#888', fontSize: '0.75rem' }}>Disabled</span>

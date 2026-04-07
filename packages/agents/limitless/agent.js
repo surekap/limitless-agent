@@ -240,7 +240,7 @@ class LifelogAgent {
   async getUnprocessedLifelogs(limit = 10) {
     // Fetch unprocessed lifelogs, including previously failed ones (up to 3 attempts)
     const { rows } = await this.db.query(
-      `SELECT * FROM lifelogs
+      `SELECT * FROM limitless.lifelogs
        WHERE processed = FALSE
          AND (processing_attempts IS NULL OR processing_attempts < 3)
        ORDER BY
@@ -254,14 +254,14 @@ class LifelogAgent {
 
   async markLifelogProcessed(lifelogId) {
     await this.db.query(
-      "UPDATE lifelogs SET processed = TRUE, processing_error = NULL, last_attempt_at = NOW() WHERE id = $1",
+      "UPDATE limitless.lifelogs SET processed = TRUE, processing_error = NULL, last_attempt_at = NOW() WHERE id = $1",
       [lifelogId]
     );
   }
 
   async markLifelogFailed(lifelogId, errorMsg) {
     await this.db.query(
-      `UPDATE lifelogs
+      `UPDATE limitless.lifelogs
        SET processing_error = $2,
            processing_attempts = COALESCE(processing_attempts, 0) + 1,
            last_attempt_at = NOW()
